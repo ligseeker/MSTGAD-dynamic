@@ -38,7 +38,7 @@ warnings.filterwarnings("ignore")
 from util.GAIA.constant import *
 
 # ============ 路径配置 ============
-Raw_Path = './data/GAIA/MicroSS'
+Raw_Path = './data/GAIA/MicroSS_part'
 Save_Path = './data/GAIA-pre'
 
 BUSINESS_DIR = os.path.join(Raw_Path, 'business', 'business_split', 'business')

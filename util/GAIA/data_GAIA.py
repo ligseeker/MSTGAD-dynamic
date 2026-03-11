@@ -289,6 +289,15 @@ class Process:
         trace_df = trace_df.dropna(subset=['sc_idx'])
         trace_df['sc_idx'] = trace_df['sc_idx'].astype(int)
 
+        # 兼容不同的列名命名
+        if 'service_name' not in trace_df.columns and 'service' in trace_df.columns:
+            trace_df = trace_df.rename(columns={'service': 'service_name'})
+            
+        if 'service_name' not in trace_df.columns:
+            # 记录此时的 columns 以便调试
+            logging.error(f"trace.csv 缺少 service_name 列，现有列: {trace_df.columns.tolist()}")
+            raise KeyError("service_name")
+
         trace_df['svc_idx'] = trace_df['service_name'].map(svc_to_idx)
         trace_df = trace_df.dropna(subset=['svc_idx'])
         trace_df['svc_idx'] = trace_df['svc_idx'].astype(int)
