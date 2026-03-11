@@ -1,0 +1,88 @@
+
+ MSTGAD-4422be38 --weight_decay:0.0005   --learning_change:100 
+loss   pr:0.9615  rc:0.9690  auc:0.9941 ap:0.9864 f1: 0.9653 pred_right: 16370 pred_wrong:130 actu_right: 16371 actu_wrong: 129
+f1   pr:0.9398  rc:0.9690  auc:0.9999 ap:0.9874 f1: 0.9542 pred_right: 16367 pred_wrong:133 actu_right: 16371 actu_wrong: 129
+
+ MSTGAD-ac3baf27 --weight_decay:0.0005   --learning_change:100 
+loss   pr:0.8812  rc:0.8285  auc:0.9780 ap:0.9435 f1: 0.8540 pred_right: 221948 pred_wrong:10372 actu_right: 221288 actu_wrong: 11032
+f1   pr:0.9397  rc:0.8338  auc:0.9759 ap:0.9449 f1: 0.8836 pred_right: 222531 pred_wrong:9789 actu_right: 221288 actu_wrong: 11032
+
+ MSTGAD-ac3baf27 --weight_decay:0.0005   --learning_change:100 
+loss   pr:0.8888  rc:0.8323  auc:0.9787 ap:0.9451 f1: 0.8596 pred_right: 221989 pred_wrong:10331 actu_right: 221288 actu_wrong: 11032
+f1   pr:0.6109  rc:0.8376  auc:0.9736 ap:0.9238 f1: 0.7065 pred_right: 217195 pred_wrong:15125 actu_right: 221288 actu_wrong: 11032
+
+ MSTGAD-ac3baf27 --weight_decay:0.0005   --learning_change:100 
+loss   pr:0.6752  rc:0.8408  auc:0.9744 ap:0.9338 f1: 0.7489 pred_right: 218581 pred_wrong:13739 actu_right: 221288 actu_wrong: 11032
+f1   pr:0.9891  rc:0.8299  auc:0.9805 ap:0.9515 f1: 0.9026 pred_right: 223063 pred_wrong:9257 actu_right: 221288 actu_wrong: 11032
+
+ MSTGAD-ac3baf27 --weight_decay:0.0005   --learning_change:100 
+loss   pr:0.9173  rc:0.8309  auc:0.9802 ap:0.9466 f1: 0.8720 pred_right: 222327 pred_wrong:9993 actu_right: 221288 actu_wrong: 11032
+f1   pr:0.8174  rc:0.8323  auc:0.9778 ap:0.9410 f1: 0.8248 pred_right: 221087 pred_wrong:11233 actu_right: 221288 actu_wrong: 11032
+
+ MSTGAD-ac3baf27 --weight_decay:0.0005   --learning_change:100 
+loss   pr:0.8805  rc:0.8335  auc:0.9787 ap:0.9440 f1: 0.8563 pred_right: 221877 pred_wrong:10443 actu_right: 221288 actu_wrong: 11032
+f1   pr:0.9607  rc:0.8331  auc:0.9790 ap:0.9490 f1: 0.8924 pred_right: 222753 pred_wrong:9567 actu_right: 221288 actu_wrong: 11032
+
+ MSTGAD-ac3baf27 --weight_decay:0.0005   --learning_change:100 
+loss   pr:0.7874  rc:0.8358  auc:0.9767 ap:0.9390 f1: 0.8109 pred_right: 220610 pred_wrong:11710 actu_right: 221288 actu_wrong: 11032
+f1   pr:0.9288  rc:0.8318  auc:0.9785 ap:0.9456 f1: 0.8776 pred_right: 222441 pred_wrong:9879 actu_right: 221288 actu_wrong: 11032
+
+ MSTGAD-ac3baf27 --weight_decay:0.0005   --learning_change:100 
+loss   pr:0.8171  rc:0.8353  auc:0.9764 ap:0.9399 f1: 0.8261 pred_right: 221043 pred_wrong:11277 actu_right: 221288 actu_wrong: 11032
+f1   pr:0.8619  rc:0.8334  auc:0.9796 ap:0.9458 f1: 0.8474 pred_right: 221653 pred_wrong:10667 actu_right: 221288 actu_wrong: 11032
+
+ MSTGAD-ac3baf27 --weight_decay:0.0005   --learning_change:100 
+loss   pr:0.8578  rc:0.8340  auc:0.9787 ap:0.9441 f1: 0.8458 pred_right: 221594 pred_wrong:10726 actu_right: 221288 actu_wrong: 11032
+f1   pr:0.9279  rc:0.8308  auc:0.9780 ap:0.9441 f1: 0.8767 pred_right: 222443 pred_wrong:9877 actu_right: 221288 actu_wrong: 11032
+
+ MSTGAD-ac3baf27 --weight_decay:0.0005   --learning_change:100 
+loss   pr:0.7194  rc:0.8362  auc:0.9756 ap:0.9361 f1: 0.7734 pred_right: 219497 pred_wrong:12823 actu_right: 221288 actu_wrong: 11032
+f1   pr:0.8514  rc:0.8329  auc:0.9758 ap:0.9409 f1: 0.8421 pred_right: 221527 pred_wrong:10793 actu_right: 221288 actu_wrong: 11032
+
+ MSTGAD-ac3baf27 --weight_decay:0.0005   --learning_change:100 
+loss   pr:0.7136  rc:0.8411  auc:0.9753 ap:0.9364 f1: 0.7721 pred_right: 219317 pred_wrong:13003 actu_right: 221288 actu_wrong: 11032
+f1   pr:0.9288  rc:0.8261  auc:0.9790 ap:0.9477 f1: 0.8744 pred_right: 222508 pred_wrong:9812 actu_right: 221288 actu_wrong: 11032
+
+ MSTGAD-ac3baf27 --weight_decay:0.0005   --learning_change:100 
+loss   pr:0.8775  rc:0.8321  auc:0.9798 ap:0.9465 f1: 0.8542 pred_right: 221858 pred_wrong:10462 actu_right: 221288 actu_wrong: 11032
+f1   pr:0.7387  rc:0.8328  auc:0.9754 ap:0.9387 f1: 0.7830 pred_right: 219882 pred_wrong:12438 actu_right: 221288 actu_wrong: 11032
+
+ MSTGAD-ac3baf27 --weight_decay:0.0005   --learning_change:100 
+loss   pr:0.8405  rc:0.8348  auc:0.9774 ap:0.9429 f1: 0.8377 pred_right: 221362 pred_wrong:10958 actu_right: 221288 actu_wrong: 11032
+f1   pr:0.9146  rc:0.8326  auc:0.9795 ap:0.9463 f1: 0.8716 pred_right: 222277 pred_wrong:10043 actu_right: 221288 actu_wrong: 11032
+
+ MSTGAD-ac3baf27 --weight_decay:0.0005   --learning_change:100 
+loss   pr:0.8644  rc:0.8336  auc:0.9762 ap:0.9416 f1: 0.8487 pred_right: 221682 pred_wrong:10638 actu_right: 221288 actu_wrong: 11032
+f1   pr:0.8989  rc:0.8258  auc:0.9784 ap:0.9450 f1: 0.8608 pred_right: 222185 pred_wrong:10135 actu_right: 221288 actu_wrong: 11032
+
+ MSTGAD-ac3baf27 --weight_decay:0.0005   --learning_change:100 
+loss   pr:0.7995  rc:0.8348  auc:0.9742 ap:0.9364 f1: 0.8168 pred_right: 220801 pred_wrong:11519 actu_right: 221288 actu_wrong: 11032
+f1   pr:0.9715  rc:0.8338  auc:0.9785 ap:0.9436 f1: 0.8974 pred_right: 222852 pred_wrong:9468 actu_right: 221288 actu_wrong: 11032
+
+ MSTGAD-ac3baf27 --weight_decay:0.0005   --learning_change:100 
+loss   pr:0.7533  rc:0.8373  auc:0.9732 ap:0.9350 f1: 0.7931 pred_right: 220058 pred_wrong:12262 actu_right: 221288 actu_wrong: 11032
+f1   pr:0.9608  rc:0.8305  auc:0.9776 ap:0.9436 f1: 0.8909 pred_right: 222784 pred_wrong:9536 actu_right: 221288 actu_wrong: 11032
+
+ MSTGAD-ac3baf27 --weight_decay:0.0005   --learning_change:100 
+loss   pr:0.8880  rc:0.8320  auc:0.9781 ap:0.9433 f1: 0.8591 pred_right: 221983 pred_wrong:10337 actu_right: 221288 actu_wrong: 11032
+f1   pr:0.9841  rc:0.8299  auc:0.9786 ap:0.9504 f1: 0.9005 pred_right: 223016 pred_wrong:9304 actu_right: 221288 actu_wrong: 11032
+
+ MSTGAD-ac3baf27 --weight_decay:0.0005   --learning_change:100 
+loss   pr:0.8067  rc:0.8390  auc:0.9754 ap:0.9385 f1: 0.8225 pred_right: 220846 pred_wrong:11474 actu_right: 221288 actu_wrong: 11032
+f1   pr:0.8895  rc:0.8337  auc:0.9767 ap:0.9441 f1: 0.8607 pred_right: 221981 pred_wrong:10339 actu_right: 221288 actu_wrong: 11032
+
+ MSTGAD-ac3baf27 --weight_decay:0.0005   --learning_change:100 
+loss   pr:0.8704  rc:0.8331  auc:0.9801 ap:0.9453 f1: 0.8513 pred_right: 221760 pred_wrong:10560 actu_right: 221288 actu_wrong: 11032
+f1   pr:0.9909  rc:0.8258  auc:0.9787 ap:0.9507 f1: 0.9008 pred_right: 223126 pred_wrong:9194 actu_right: 221288 actu_wrong: 11032
+
+ MSTGAD-ac3baf27 --weight_decay:0.0005   --learning_change:100 
+loss   pr:0.7529  rc:0.8384  auc:0.9764 ap:0.9386 f1: 0.7933 pred_right: 220035 pred_wrong:12285 actu_right: 221288 actu_wrong: 11032
+f1   pr:0.9170  rc:0.8318  auc:0.9767 ap:0.9422 f1: 0.8723 pred_right: 222314 pred_wrong:10006 actu_right: 221288 actu_wrong: 11032
+
+ MSTGAD-ac3baf27 --weight_decay:0.0005   --learning_change:100 
+loss   pr:0.9019  rc:0.8314  auc:0.9775 ap:0.9431 f1: 0.8652 pred_right: 222150 pred_wrong:10170 actu_right: 221288 actu_wrong: 11032
+f1   pr:0.9418  rc:0.8338  auc:0.9779 ap:0.9458 f1: 0.8846 pred_right: 222553 pred_wrong:9767 actu_right: 221288 actu_wrong: 11032
+
+ MSTGAD-ac3baf27 --weight_decay:0.0005   --learning_change:100 
+loss   pr:0.8968  rc:0.8330  auc:0.9782 ap:0.9432 f1: 0.8637 pred_right: 222072 pred_wrong:10248 actu_right: 221288 actu_wrong: 11032
+f1   pr:0.6914  rc:0.8354  auc:0.9762 ap:0.9369 f1: 0.7566 pred_right: 218990 pred_wrong:13330 actu_right: 221288 actu_wrong: 11032
