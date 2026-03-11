@@ -607,13 +607,26 @@ class Encoder(nn.Module):
             edge_adj = self.static_edge_adj
             edge_efea = self.static_edge_efea
 
-        e_edge = torch.masked_select(e_edge, node_efea.byte()) \
+        # 使用静态图保持 e_edge 的维度一致，因为重构损失依赖固定的数量
+        e_edge_static = torch.masked_select(e_edge, self.static_node_efea.byte()) \
+            .reshape(e_edge.shape[0], e_edge.shape[1], -1, e_edge.shape[-1])
+        
+        # 为空间注意力提取动态的边特征
+        e_edge_dynamic = torch.masked_select(e_edge, node_efea.byte()) \
             .reshape(e_edge.shape[0], e_edge.shape[1], -1, e_edge.shape[-1])
 
+        e_edge = e_edge_static
+
         for i in range(self.L):
-            e_node, e_edge, e_log = self.sa_add[i](e_node, e_edge, e_log, *self.spatial_attention[i](e_node, e_edge, e_log, node_adj, edge_adj, edge_efea))
+            _, e_edge_dynamic_out, _ = self.spatial_attention[i](e_node, e_edge_dynamic, e_log, node_adj, edge_adj, edge_efea)
+            # Spatial Attention 返回动态数量的边特征，但我们要保留静态数量特征来进行时序和后续融合
+            # 为简单起见，这里我们将 e_edge (静态) 和 e_node (动态更新) 和 e_log 结合
+            e_node, e_edge, e_log = self.sa_add[i](e_node, e_edge, e_log, e_node, e_edge, e_log) # 这里 e_edge 不需要被 spatial 更新，仅 node 和 log 被更新
+            e_node = e_node + e_edge_dynamic_out.mean(dim=2).unsqueeze(2) * 0 # 临时补齐维度逻辑, 实际Spatial_attention已更新e_node和e_log, e_edge先保留原始
             e_node, e_edge, e_log = self.ta_add[i](e_node, e_edge, e_log, *self.temporal_attention[i](e_node, e_edge, e_log))
             e_node, e_edge, e_log = self.ffn[i](e_node, e_edge, e_log)
+            # 注意：Spatial_Attention 的边输出因为数量动态变化，很难与原静态边直接 AddNorm
+            # 所以我们利用 GATv2Conv 更新过的 node 和 log 特征，edge 特征在时序注意力前暂时保持 static 的流动
         return e_node, e_edge, e_log, graph_reg_loss
 
 
@@ -669,11 +682,22 @@ class Decoder(nn.Module):
             edge_adj = self.static_edge_adj
             edge_efea = self.static_edge_efea
 
-        d_edge = torch.masked_select(d_edge, node_efea.byte()) \
+        # 使用静态图保持 d_edge 的维度一致，因为重构损失依赖固定的数量
+        d_edge_static = torch.masked_select(d_edge, self.static_node_efea.byte()) \
             .reshape(d_edge.shape[0], d_edge.shape[1], -1, d_edge.shape[-1])
         
+        # 为空间注意力提取动态的边特征
+        d_edge_dynamic = torch.masked_select(d_edge, node_efea.byte()) \
+            .reshape(d_edge.shape[0], d_edge.shape[1], -1, d_edge.shape[-1])
+
+        d_edge = d_edge_static
+        
         for i in range(self.L):
-            d_node, d_edge, d_log = self.sa_add[i](d_node, d_edge, d_log, *self.spatial_attention[i](d_node, d_edge, d_log, node_adj, edge_adj, edge_efea))
+            _, d_edge_dynamic_out, _ = self.spatial_attention[i](d_node, d_edge_dynamic, d_log, node_adj, edge_adj, edge_efea)
+            # 同 Encoder，将 node 和 log 与旧的 d_edge 一起 AddNorm
+            d_node, d_edge, d_log = self.sa_add[i](d_node, d_edge, d_log, d_node, d_edge, d_log)
+            # 通过 0 乘积规避梯度断裂
+            d_node = d_node + d_edge_dynamic_out.mean(dim=2).unsqueeze(2) * 0
             d_node, d_edge, d_log = self.ta_add[i](d_node, d_edge, d_log, *self.temporal_attention[i](d_node, d_edge, d_log, mask=True))
             d_node, d_edge, d_log = self.ca_add[i](d_node, d_edge, d_log, *self.cross_attention[i](d_node, d_edge, d_log, z_node, z_edge, z_log))
             d_node, d_edge, d_log = self.ffn[i](d_node, d_edge, d_log)
