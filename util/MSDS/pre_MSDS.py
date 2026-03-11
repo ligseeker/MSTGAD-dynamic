@@ -122,9 +122,11 @@ def readtrace(data, base_trace=None, name='start', isfirst=False):
     
 
 def deal_log(data_path):
-    config_file = "./util/msds.ini"
-    template_file = "./util/log_template.csv"
-    state_file = "./util/log_state.pkl"
+    # 使用脚本所在目录的相对路径，确保以module方式运行时也能找到配置文件
+    _script_dir = os.path.dirname(os.path.abspath(__file__))
+    config_file = os.path.join(_script_dir, "msds.ini")
+    template_file = os.path.join(_script_dir, "log_template.csv")
+    state_file = os.path.join(_script_dir, "log_state.pkl")
 
     data = pd.read_csv(data_path, keep_default_na=False)
     data = data[['Hostname','@timestamp','log_level','Payload']]

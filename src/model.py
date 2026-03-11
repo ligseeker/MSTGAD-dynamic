@@ -11,6 +11,7 @@ class MyModel(nn.Module):
 		self.device = torch.device('cuda' if args.get('gpu', False) and torch.cuda.is_available() else 'cpu')
 		self.graph = torch.tensor(graph).to(self.device)
 		self.label_weight = args['label_weight']
+		num_nodes = args.get('num_nodes', graph.shape[0])
 
 		adj = dense_to_sparse(self.graph)[0]
 		trace2pod = torch.nn.functional.one_hot(adj[0], num_classes=graph.shape[0]) \
@@ -22,11 +23,13 @@ class MyModel(nn.Module):
 		self.encoder = Encoder(graph=self.graph, node_embedding=args['feature_node'], edge_embedding=args['feature_edge'], log_embedding=args['feature_log'],
                          node_heads=args['num_heads_node'], log_heads=args['num_heads_log'], edge_heads=args['num_heads_edge'],
                          n2e_heads=args['num_heads_n2e'], e2n_heads=args['num_heads_e2n'],
-                         dropout=args['dropout'], batch_size=args['batch_size'], window_size=args['window'], num_layer=args['num_layer'], trace2pod=trace2pod)
+                         dropout=args['dropout'], batch_size=args['batch_size'], window_size=args['window'], num_layer=args['num_layer'], trace2pod=trace2pod,
+                         graph_hidden=args.get('graph_hidden', 16), num_nodes=num_nodes)
 		self.decoder = Decoder(graph=self.graph, node_embedding=args['feature_node'], edge_embedding=args['feature_edge'], log_embedding=args['feature_log'],
                          node_heads=args['num_heads_node'], log_heads=args['num_heads_log'], edge_heads=args['num_heads_edge'],
                          n2e_heads=args['num_heads_n2e'], e2n_heads=args['num_heads_e2n'],
-                         dropout=args['dropout'], batch_size=args['batch_size'], window_size=args['window'], num_layer=args['num_layer'], trace2pod=trace2pod)
+                         dropout=args['dropout'], batch_size=args['batch_size'], window_size=args['window'], num_layer=args['num_layer'], trace2pod=trace2pod,
+                         graph_hidden=args.get('graph_hidden', 16), num_nodes=num_nodes)
 
 		self.node_emb = Embed(args['raw_node'], args['feature_node'], dim=4)
 		self.log_emb = Embed(args['log_len'], args['feature_log'], dim=4)
@@ -44,13 +47,26 @@ class MyModel(nn.Module):
                             nn.LeakyReLU(inplace=True),
                             nn.Linear((args['raw_node'] + args['raw_edge'] + args['log_len']) // 2, 2))
 
+		# === 创新点3: 对比学习 ===
+		self.contrastive_loss = ContrastiveLoss(
+			node_dim=args['feature_node'],
+			edge_dim=args['feature_edge'],
+			log_dim=args['feature_log'],
+			proj_dim=args.get('contrast_proj_dim', 32),
+			temperature=args.get('contrast_temp', 0.1)
+		)
+		# 图正则化权重
+		self.graph_sparse_weight = args.get('graph_sparse_weight', 1e-3)
+
 	def forward(self, x, evaluate=False):
 		x_node, d_node = self.node_emb(x['data_node'])
 		x_edge, d_edge = self.egde_emb(x['data_edge'])
 		x_log, d_log = self.log_emb(x['data_log'])
 
-		z_node, z_edge, z_log = self.encoder(x_node, x_edge, x_log)
-		node, edge, log = self.decoder(d_node, d_edge, d_log, z_node, z_edge, z_log)
+		# Encoder 现在返回 graph_reg_loss
+		z_node, z_edge, z_log, enc_graph_reg = self.encoder(x_node, x_edge, x_log)
+		# Decoder 现在返回 graph_reg_loss
+		node, edge, log, dec_graph_reg = self.decoder(d_node, d_edge, d_log, z_node, z_edge, z_log)
         
 		l_edge = torch.masked_select(x['data_edge'], self.graph.unsqueeze(-1).repeat(1, 1, x['data_edge'].shape[-1]).byte()) \
 			.reshape(x['data_edge'].shape[0], x['data_edge'].shape[1], -1, x['data_edge'].shape[-1])
@@ -62,6 +78,10 @@ class MyModel(nn.Module):
 		rec_edge = torch.matmul(rec_edge1.permute(
 			0, 1, 3, 2), self.trace2pod.float()).permute(0, 1, 3, 2)
 		rec = torch.concat([rec_node, rec_log, rec_edge], dim=-1)
+
+		# 合并图正则化损失
+		total_graph_reg = (enc_graph_reg + dec_graph_reg) * self.graph_sparse_weight
+
 		if evaluate:
 			rec = rec[:, -1].squeeze()
 			cls_result = torch.softmax(self.show(rec), dim=-1)
@@ -92,8 +112,10 @@ class MyModel(nn.Module):
 			                          node_rec, torch.zeros_like(node_rec).to(node_rec.device))
 			rec_loss = [node_right, node_wrong, node_unkown]
 
-
 			param = label_pod.shape[0] * label_pod.shape[1]
 			rec_loss = list(map(lambda x: x.sum() / param, rec_loss))
 
-			return rec_loss, cls_result, cls_label
+			# === 创新点3: 计算对比损失 ===
+			contrast_loss = self.contrastive_loss(z_node, z_edge, z_log, node, edge, log)
+
+			return rec_loss, cls_result, cls_label, contrast_loss, total_graph_reg

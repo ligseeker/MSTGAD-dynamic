@@ -92,6 +92,9 @@ class Base(nn.Module):
 class MY(Base):
     def __init__(self, model, **args):
         super().__init__(model, **args)
+        # === 创新点3: 对比学习参数 ===
+        self.contrast_weight = args.get('contrast_weight', 0.1)
+        self.contrast_warmup = args.get('contrast_warmup', 5)
 
     def fit(self, train_loader, test_loader, **args):
         optimizer = AdaBelief(self.model.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
@@ -106,23 +109,34 @@ class MY(Base):
             np.array(list(self.True_list.values())), dtype=torch.float).cuda()
         losser = nn.BCEWithLogitsLoss(reduce='mean', weight=label_weight)
         logging.info('optimizer : using AdaBelief')
+        logging.info(f'Innovations: Dynamic Graph + Gated Fusion + Contrastive Learning')
+        logging.info(f'  contrast_weight={self.contrast_weight}, contrast_warmup={self.contrast_warmup}')
 
         for epoch in range(0, self.epoches):
             lr = optimizer.param_groups[0]['lr']
             para = torch.tensor(1 / (epoch // self.rec_down + 1))
             para = para if para > self.para_low else self.para_low
+            
+            # === 创新点3: 对比损失 warm-up ===
+            if epoch < self.contrast_warmup:
+                gamma = self.contrast_weight * (epoch / max(self.contrast_warmup, 1))
+            else:
+                gamma = self.contrast_weight
 
             logging.info('-' * 100)
             logging.info(
-                f'{epoch}/{self.epoches} starting... lr: {lr} para:{para}')
+                f'{epoch}/{self.epoches} starting... lr: {lr} para:{para} gamma(contrast):{gamma:.4f}')
             self.model.train()
             epoch_cls_loss, epoch_rec_loss, epoch_loss = [], [], []
+            epoch_contrast_loss, epoch_graph_reg_loss = [], []
             epoch_time_start = time.time()
             with tqdm(train_loader) as tbar:
                 for batch_input in tbar:
                     batch_input = self.input2device(batch_input, self.use_gpu)
                     optimizer.zero_grad()
-                    raw_loss, cls_result, cls_label = self.model(batch_input)
+                    
+                    # 模型现在返回5个值: rec_loss, cls_result, cls_label, contrast_loss, graph_reg_loss
+                    raw_loss, cls_result, cls_label, contrast_loss, graph_reg_loss = self.model(batch_input)
 
                     rec_loss = sum(raw_loss)
                     if cls_result.shape[0] == 0:
@@ -130,7 +144,8 @@ class MY(Base):
                     else:
                         cls_loss = losser(cls_result, cls_label)
 
-                    loss = (1 - para) * cls_loss + para * rec_loss
+                    # === 综合损失 = 分类损失 + 重构损失 + 对比损失 + 图正则化 ===
+                    loss = (1 - para) * cls_loss + para * rec_loss + gamma * contrast_loss + graph_reg_loss
 
                     if torch.isnan(loss):
                         isWrong = True
@@ -143,15 +158,20 @@ class MY(Base):
 
                     epoch_cls_loss.append(cls_loss.item())
                     epoch_rec_loss.append(rec_loss.item())
+                    epoch_contrast_loss.append(contrast_loss.item())
+                    epoch_graph_reg_loss.append(graph_reg_loss.item())
                     epoch_loss.append(loss.item())
                     tbar.set_postfix(
-                        loss=f'{loss.item():.8f},{cls_loss.item():.8f},{rec_loss.item():.8f}')
+                        loss=f'{loss.item():.6f}', cls=f'{cls_loss.item():.6f}',
+                        rec=f'{rec_loss.item():.6f}', ctr=f'{contrast_loss.item():.4f}')
 
             # show the result about this epoch
             epoch_time_elapsed = time.time() - epoch_time_start
             epoch_loss = torch.mean(torch.tensor(epoch_loss)).item()
             epoch_cls_loss = torch.mean(torch.tensor(epoch_cls_loss)).item()
             epoch_rec_loss = torch.mean(torch.tensor(epoch_rec_loss)).item()
+            epoch_contrast_loss = torch.mean(torch.tensor(epoch_contrast_loss)).item()
+            epoch_graph_reg_loss = torch.mean(torch.tensor(epoch_graph_reg_loss)).item()
 
             if isWrong:
                 logging.info("calculate error in epoch {}".format(epoch))
@@ -172,8 +192,18 @@ class MY(Base):
 
             pre_loss = epoch_loss
             logging.info(
-                "Epoch {}/{}, all_loss:{:.5f} cls_loss:{:.5f} rec_loss:{:.5f} [{:.2f}s]; best loss:{:.5f}, patience : {}"
-                .format(epoch, self.epoches, epoch_loss, epoch_cls_loss, epoch_rec_loss, epoch_time_elapsed, best["loss"]['score'], worse_count))
+                "Epoch {}/{}, all:{:.5f} cls:{:.5f} rec:{:.5f} ctr:{:.5f} greg:{:.5f} [{:.2f}s]; best:{:.5f} pat:{}"
+                .format(epoch, self.epoches, epoch_loss, epoch_cls_loss, epoch_rec_loss,
+                        epoch_contrast_loss, epoch_graph_reg_loss,
+                        epoch_time_elapsed, best["loss"]['score'], worse_count))
+            
+            # 打印动态图学习的 λ 值
+            try:
+                enc_lambda = torch.sigmoid(self.model.encoder.dynamic_graph_learner.graph_lambda).item()
+                dec_lambda = torch.sigmoid(self.model.decoder.dynamic_graph_learner.graph_lambda).item()
+                logging.info(f"  Graph λ: encoder={enc_lambda:.4f}, decoder={dec_lambda:.4f}")
+            except Exception:
+                pass
             
             if epoch > self.rec_down:
                 result = self.evaluate(train_loader)
@@ -208,4 +238,3 @@ class MY(Base):
                 return info
             else:
                 return result
-
