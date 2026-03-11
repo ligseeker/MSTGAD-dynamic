@@ -622,7 +622,7 @@ class Encoder(nn.Module):
             # Spatial Attention 返回动态数量的边特征，但我们要保留静态数量特征来进行时序和后续融合
             # 为简单起见，这里我们将 e_edge (静态) 和 e_node (动态更新) 和 e_log 结合
             e_node, e_edge, e_log = self.sa_add[i](e_node, e_edge, e_log, e_node, e_edge, e_log) # 这里 e_edge 不需要被 spatial 更新，仅 node 和 log 被更新
-            e_node = e_node + e_edge_dynamic_out.mean(dim=2).unsqueeze(2) * 0 # 临时补齐维度逻辑, 实际Spatial_attention已更新e_node和e_log, e_edge先保留原始
+            e_node = e_node + e_edge_dynamic_out.sum() * 0 # 临时补齐维度逻辑, 实际Spatial_attention已更新e_node和e_log, e_edge先保留原始
             e_node, e_edge, e_log = self.ta_add[i](e_node, e_edge, e_log, *self.temporal_attention[i](e_node, e_edge, e_log))
             e_node, e_edge, e_log = self.ffn[i](e_node, e_edge, e_log)
             # 注意：Spatial_Attention 的边输出因为数量动态变化，很难与原静态边直接 AddNorm
@@ -697,7 +697,7 @@ class Decoder(nn.Module):
             # 同 Encoder，将 node 和 log 与旧的 d_edge 一起 AddNorm
             d_node, d_edge, d_log = self.sa_add[i](d_node, d_edge, d_log, d_node, d_edge, d_log)
             # 通过 0 乘积规避梯度断裂
-            d_node = d_node + d_edge_dynamic_out.mean(dim=2).unsqueeze(2) * 0
+            d_node = d_node + d_edge_dynamic_out.sum() * 0
             d_node, d_edge, d_log = self.ta_add[i](d_node, d_edge, d_log, *self.temporal_attention[i](d_node, d_edge, d_log, mask=True))
             d_node, d_edge, d_log = self.ca_add[i](d_node, d_edge, d_log, *self.cross_attention[i](d_node, d_edge, d_log, z_node, z_edge, z_log))
             d_node, d_edge, d_log = self.ffn[i](d_node, d_edge, d_log)
