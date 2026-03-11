@@ -47,6 +47,15 @@ class MyModel(nn.Module):
                             nn.LeakyReLU(inplace=True),
                             nn.Linear((args['raw_node'] + args['raw_edge'] + args['log_len']) // 2, 2))
 
+		# === 创新点1: 动态图学习器（Encoder/Decoder共享） ===
+		self.dynamic_graph_learner = DynamicGraphLearner(
+			node_dim=args['feature_node'],
+			log_dim=args['feature_log'],
+			hidden_dim=args.get('graph_hidden', 16),
+			num_nodes=num_nodes
+		)
+		self.graph_sparse_weight = args.get('graph_sparse_weight', 1e-3)
+
 		# === 创新点3: 对比学习 ===
 		self.contrastive_loss = ContrastiveLoss(
 			node_dim=args['feature_node'],
@@ -55,19 +64,28 @@ class MyModel(nn.Module):
 			proj_dim=args.get('contrast_proj_dim', 32),
 			temperature=args.get('contrast_temp', 0.1)
 		)
-		# 图正则化权重
-		self.graph_sparse_weight = args.get('graph_sparse_weight', 1e-3)
 
 	def forward(self, x, evaluate=False):
 		x_node, d_node = self.node_emb(x['data_node'])
 		x_edge, d_edge = self.egde_emb(x['data_edge'])
 		x_log, d_log = self.log_emb(x['data_log'])
 
-		# Encoder 现在返回 graph_reg_loss
-		z_node, z_edge, z_log, enc_graph_reg = self.encoder(x_node, x_edge, x_log)
-		# Decoder 现在返回 graph_reg_loss
-		node, edge, log, dec_graph_reg = self.decoder(d_node, d_edge, d_log, z_node, z_edge, z_log)
+		# === 创新点1: 动态图（只计算一次，共享边权重） ===
+		edge_weights, graph_reg_loss = self.dynamic_graph_learner(x_node, x_log, self.graph)
+		total_graph_reg = graph_reg_loss * self.graph_sparse_weight
+
+		# 将动态学习到的边权重（软注意力掩膜）应用到边特征上
+		# edge_weights shape: [N, N]
+		# x_edge shape: [B, W, N, N, F] -> expand 权重进行广播
+		weight_mask = edge_weights.unsqueeze(0).unsqueeze(0).unsqueeze(-1)
+		x_edge_dynamic = x_edge * weight_mask
+
+		# Encoder/Decoder 使用静态图拓扑，但特征已被动态权重调制（性能+效果双赢）
+		z_node, z_edge, z_log = self.encoder(x_node, x_edge_dynamic, x_log)
+		node, edge, log = self.decoder(d_node, d_edge, d_log, z_node, z_edge, z_log)
         
+		# 对于 l_edge (用于计算重构损失的标注)，保持原始的 x_edge 特征不受缩放影响
+		# 这类似于自编码器目标：尽管中间被掩膜/压缩，最终仍需努力还原真实的边特征
 		l_edge = torch.masked_select(x['data_edge'], self.graph.unsqueeze(-1).repeat(1, 1, x['data_edge'].shape[-1]).byte()) \
 			.reshape(x['data_edge'].shape[0], x['data_edge'].shape[1], -1, x['data_edge'].shape[-1])
 
@@ -78,9 +96,6 @@ class MyModel(nn.Module):
 		rec_edge = torch.matmul(rec_edge1.permute(
 			0, 1, 3, 2), self.trace2pod.float()).permute(0, 1, 3, 2)
 		rec = torch.concat([rec_node, rec_log, rec_edge], dim=-1)
-
-		# 合并图正则化损失
-		total_graph_reg = (enc_graph_reg + dec_graph_reg) * self.graph_sparse_weight
 
 		if evaluate:
 			rec = rec[:, -1].squeeze()

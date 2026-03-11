@@ -86,3 +86,10 @@ f1   pr:0.9418  rc:0.8338  auc:0.9779 ap:0.9458 f1: 0.8846 pred_right: 222553 pr
  MSTGAD-ac3baf27 --weight_decay:0.0005   --learning_change:100 
 loss   pr:0.8968  rc:0.8330  auc:0.9782 ap:0.9432 f1: 0.8637 pred_right: 222072 pred_wrong:10248 actu_right: 221288 actu_wrong: 11032
 f1   pr:0.6914  rc:0.8354  auc:0.9762 ap:0.9369 f1: 0.7566 pred_right: 218990 pred_wrong:13330 actu_right: 221288 actu_wrong: 11032
+
+ MSTGAD-a86f998f --weight_decay:0.0005   --learning_change:100 
+loss   pr:0.9231  rc:0.1860  auc:0.8460 ap:0.7697 f1: 0.3097 pred_right: 16474 pred_wrong:26 actu_right: 16371 actu_wrong: 129
+f1   pr:0.9231  rc:0.1860  auc:0.8460 ap:0.7697 f1: 0.3097 pred_right: 16474 pred_wrong:26 actu_right: 16371 actu_wrong: 129
+
+ MSTGAD-d5155caf --weight_decay:0.0005   --learning_change:100 
+loss   pr:0.2727  rc:0.0233  auc:0.4400 ap:0.5617 f1: 0.0429 pred_right: 16489 pred_wrong:11 actu_right: 16371 actu_wrong: 129

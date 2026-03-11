@@ -77,8 +77,11 @@ class Base(nn.Module):
             logging.info(f'No {self.model.name} statue file')
         else:
             logging.info(f'{self.model.name} on {model_save_file} loading...')
-            self.model.load_state_dict(torch.load(
-                    os.path.join(model_save_file, f"{self.model.name}_{name}_stage.ckpt")))
+            ckpt_path = os.path.join(model_save_file, f"{self.model.name}_{name}_stage.ckpt")
+            if os.path.exists(ckpt_path):
+                self.model.load_state_dict(torch.load(ckpt_path))
+            else:
+                logging.info(f"{ckpt_path} not found, skipping load.")
 
     # Saving modal paras
     def save_model(self, best_dict, model_save_dir="", name='loss'):
