@@ -86,7 +86,7 @@ parser.add_argument("--num_nodes", default=10, type=int,
                     help='the number of service nodes in GAIA')
 
 # path setting
-parser.add_argument("--data_path", default='./data/GAIA-pre',
+parser.add_argument("--data_path", default='../DAG_dynamic_fusion_gaia/data/GAIA-pre',
                     type=str, help='the path of preprocessed data')
 parser.add_argument("--dataset_path", default="./data/GAIA-save",
                     type=str, help='the path of saving windowed data')

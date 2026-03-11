@@ -57,6 +57,22 @@ parser.add_argument("--num_layer", default=2, type=int,
                     help='the number of model layers')
 parser.add_argument("--dropout", default=0.2, type=float)
 
+# === Innovation parameters ===
+# Dynamic Graph
+parser.add_argument("--graph_hidden", default=16, type=int,
+                    help='hidden dim for dynamic graph learner')
+parser.add_argument("--graph_sparse_weight", default=1e-3, type=float,
+                    help='graph regularization weight (sparsity + KL)')
+# Contrastive Learning
+parser.add_argument("--contrast_weight", default=0.1, type=float,
+                    help='contrastive loss weight')
+parser.add_argument("--contrast_temp", default=0.1, type=float,
+                    help='InfoNCE temperature')
+parser.add_argument("--contrast_proj_dim", default=32, type=int,
+                    help='projection dim for contrastive head')
+parser.add_argument("--contrast_warmup", default=5, type=int,
+                    help='warm-up epochs for contrastive loss')
+
 # dataset setting
 parser.add_argument("--batch_size", default=32, type=int,
                     help='batch size (reduced from 50 due to larger data)')
@@ -70,7 +86,7 @@ parser.add_argument("--num_nodes", default=10, type=int,
                     help='the number of service nodes in GAIA')
 
 # path setting
-parser.add_argument("--data_path", default='./data/GAIA-pre',
+parser.add_argument("--data_path", default='../DAG_dynamic_fusion_gaia/data/GAIA-pre',
                     type=str, help='the path of preprocessed data')
 parser.add_argument("--dataset_path", default="./data/GAIA-save",
                     type=str, help='the path of saving windowed data')
