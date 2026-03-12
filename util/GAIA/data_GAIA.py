@@ -343,18 +343,27 @@ class Process:
             logging.info("read no data")
             return None, None
 
-        dataset = os.listdir(self.dataset_path)
-        # 优化排序和过滤
-        dataset = [f for f in dataset if f.endswith('.pkl')]
-        dataset.sort(key=lambda x: (int(re.split(r"[-_.]", x)[0])))
-
-        # 检查是否有限制
-        if self.max_timesteps > 0:
-            dataset = dataset[:self.max_timesteps]
-
-        for file in tqdm(dataset, desc="Loading saved windows"):
-            data = pickle.load(open(os.path.join(self.dataset_path, file), 'rb'))
-            self.dataset.append(data)
+        dataset_file = os.path.join(self.dataset_path, 'dataset.pkl')
+        if os.path.exists(dataset_file):
+            logging.info("Loading unified dataset.pkl...")
+            self.dataset = pickle.load(open(dataset_file, 'rb'))
+            if self.max_timesteps > 0:
+                logging.info(f"Limiting to first {self.max_timesteps} timesteps")
+                self.dataset = self.dataset[:self.max_timesteps]
+        else:
+            logging.info("dataset.pkl not found, loading individual .pkl files...")
+            dataset = os.listdir(self.dataset_path)
+            # 优化排序和过滤
+            dataset = [f for f in dataset if f.endswith('.pkl')]
+            dataset.sort(key=lambda x: (int(re.split(r"[-_.]", x)[0])))
+    
+            # 检查是否有限制
+            if self.max_timesteps > 0:
+                dataset = dataset[:self.max_timesteps]
+    
+            for file in tqdm(dataset, desc="Loading saved windows"):
+                data = pickle.load(open(os.path.join(self.dataset_path, file), 'rb'))
+                self.dataset.append(data)
 
         # 从第一个样本推断维度
         if self.dataset:
@@ -376,10 +385,16 @@ class Process:
         logging.info("save Transform data")
         if not os.path.exists(self.dataset_path):
             os.makedirs(self.dataset_path, exist_ok=True)
-        for _, item in tqdm(enumerate(self.dataset)):
-            with open(f'{self.dataset_path}/{item["name"]}.pkl', 'wb') as f:
+            
+        logging.info("Removing 'name' key and saving to a unified dataset.pkl...")
+        for item in self.dataset:
+            if 'name' in item:
                 del item['name']
-                pickle.dump(item, f)
+                
+        dataset_file = os.path.join(self.dataset_path, 'dataset.pkl')
+        with open(dataset_file, 'wb') as f:
+            pickle.dump(self.dataset, f)
+        logging.info(f"Successfully saved all data to {dataset_file}")
 
     def _transform(self):
         """将多模态数据转换为滑动窗口样本"""

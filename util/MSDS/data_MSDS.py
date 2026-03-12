@@ -120,22 +120,36 @@ class Process:
             logging.info("read no data")
             return None, None
         
-        dataset = os.listdir(self.dataset_path)
-        dataset.sort(key=lambda x: (int(re.split(r"[-_.]", x)[0])))
-        
-        for file in tqdm(dataset):
-            data = pickle.load(open(os.path.join(self.dataset_path, file), 'rb'))
-            self.dataset.append(data)
+        dataset_file = os.path.join(self.dataset_path, 'dataset.pkl')
+        if os.path.exists(dataset_file):
+            logging.info("Loading unified dataset.pkl...")
+            self.dataset = pickle.load(open(dataset_file, 'rb'))
+        else:
+            logging.info("dataset.pkl not found, loading individual .pkl files...")
+            dataset = os.listdir(self.dataset_path)
+            # Filter to only .pkl files, avoid directories or other files
+            dataset = [f for f in dataset if f.endswith('.pkl')]
+            dataset.sort(key=lambda x: (int(re.split(r"[-_.]", x)[0])))
+            
+            for file in tqdm(dataset):
+                data = pickle.load(open(os.path.join(self.dataset_path, file), 'rb'))
+                self.dataset.append(data)
 
     # saving data
     def save_data(self):
         logging.info("save Tranform data")
         if not os.path.exists(self.dataset_path):
             os.makedirs(self.dataset_path, exist_ok=True)
-        for _, item in tqdm(enumerate(self.dataset)):
-            with open(f'{self.dataset_path}/{item["name"]}.pkl', 'wb') as f:
+            
+        logging.info("Removing 'name' key and saving to a unified dataset.pkl...")
+        for item in self.dataset:
+            if 'name' in item:
                 del item['name']
-                pickle.dump(item, f)
+                
+        dataset_file = os.path.join(self.dataset_path, 'dataset.pkl')
+        with open(dataset_file, 'wb') as f:
+            pickle.dump(self.dataset, f)
+        logging.info(f"Successfully saved all data to {dataset_file}")
 
     # split to sliding windows
     def _transform(self):
