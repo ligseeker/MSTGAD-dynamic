@@ -37,10 +37,11 @@ class DynamicGraphLearner(nn.Module):
     - 这样避免了每次forward都需调用adj2adj_dynamic的开销
     - 通过可学习的λ参数控制动态权重与静态权重（全1）的融合
     """
-    def __init__(self, node_dim, log_dim, hidden_dim=16, num_nodes=5):
+    def __init__(self, node_dim, log_dim, hidden_dim=16, num_nodes=5, summary_mode='last'):
         super(DynamicGraphLearner, self).__init__()
         input_dim = node_dim + log_dim
         self.num_nodes = num_nodes
+        self.summary_mode = summary_mode
         
         # 源/目标节点投影
         self.proj_src = nn.Linear(input_dim, hidden_dim)
@@ -52,6 +53,12 @@ class DynamicGraphLearner(nn.Module):
         # 温度参数
         self.temperature = 0.5
         
+    def _summarize_inputs(self, x_node, x_log):
+        h = torch.cat([x_node, x_log], dim=-1)
+        if self.summary_mode == 'mean':
+            return h.mean(dim=1).mean(dim=0)
+        return h[:, -1].mean(dim=0)
+
     def forward(self, x_node, x_log, static_graph):
         """
         Args:
@@ -62,8 +69,8 @@ class DynamicGraphLearner(nn.Module):
             edge_weights: [N, N] 动态边权重矩阵（与静态图同尺寸）
             graph_reg_loss: 正则化损失
         """
-        # 将 node 和 log 特征拼接后取全局均值
-        h = torch.cat([x_node, x_log], dim=-1).mean(dim=1).mean(dim=0)  # [N, input_dim]
+        # 使用更贴近异常判别的末时刻特征来驱动动态图，兼顾效率和任务一致性
+        h = self._summarize_inputs(x_node, x_log)  # [N, input_dim]
         
         src = self.proj_src(h)  # [N, hidden]
         tgt = self.proj_tgt(h)  # [N, hidden]
@@ -462,6 +469,9 @@ class Encoder(nn.Module):
         super(Encoder, self).__init__()
         # 始终使用静态图的拓扑结构（只在init时计算一次）
         self.node_adj, self.node_efea, self.edge_adj, self.edge_efea = adj2adj(graph, batch_size, window_size, edge_embedding)
+        edge_index = dense_to_sparse(graph)[0]
+        self.register_buffer('edge_src', edge_index[0].long())
+        self.register_buffer('edge_dst', edge_index[1].long())
         self.graph = graph
         self.L = num_layer
         self.batch_size = batch_size
@@ -484,9 +494,8 @@ class Encoder(nn.Module):
 
 
     def forward(self, e_node, e_edge, e_log):
-        # 使用静态图的拓扑结构筛选边特征（只做一次masked_select）
-        e_edge = torch.masked_select(e_edge, self.node_efea.byte()) \
-            .reshape(e_edge.shape[0], e_edge.shape[1], -1, e_edge.shape[-1])
+        # 直接用缓存的边索引抽取真实边，避免masked_select带来的额外开销
+        e_edge = e_edge[:, :, self.edge_src, self.edge_dst, :]
 
         for i in range(self.L):
             e_node, e_edge, e_log = self.sa_add[i](e_node, e_edge, e_log, *self.spatial_attention[i](e_node, e_edge, e_log, self.node_adj, self.edge_adj, self.edge_efea))
@@ -502,6 +511,9 @@ class Decoder(nn.Module):
                  graph_hidden=16, num_nodes=5):
         super(Decoder, self).__init__()
         self.node_adj, self.node_efea, self.edge_adj, self.edge_efea = adj2adj(graph, batch_size, window_size, edge_embedding)
+        edge_index = dense_to_sparse(graph)[0]
+        self.register_buffer('edge_src', edge_index[0].long())
+        self.register_buffer('edge_dst', edge_index[1].long())
         self.graph = graph
         self.L = num_layer
         self.batch_size = batch_size
@@ -528,8 +540,7 @@ class Decoder(nn.Module):
         self.ffn = nn.ModuleList([FFN(node_embedding, edge_embedding, log_embedding, dropout) for _ in range(self.L)])
 
     def forward(self, d_node, d_edge, d_log, z_node, z_edge, z_log):
-        d_edge = torch.masked_select(d_edge, self.node_efea.byte()) \
-            .reshape(d_edge.shape[0], d_edge.shape[1], -1, d_edge.shape[-1])
+        d_edge = d_edge[:, :, self.edge_src, self.edge_dst, :]
         
         for i in range(self.L):
             d_node, d_edge, d_log = self.sa_add[i](d_node, d_edge, d_log, *self.spatial_attention[i](d_node, d_edge, d_log, self.node_adj, self.edge_adj, self.edge_efea))

@@ -105,14 +105,16 @@ timestamp,host_ip,service_name,trace_id,span_id,parent_id,start_time,end_time,ur
 初步想法是去除方差很小的特征。可以给出更多的处理方法。
 
 ### 标签
-
 对于 MicroSS 数据，数据标签设置为运行维护事件的标签，而非指标的标签。
+
+GAIA数据集本身没有很明确的label，需要将run_table_2021-07.csv文件里的事件转化为label，然后进行读取，由于GAIA数据集的metric模态的数据是30s采样，log和trace模态的数据没有固定的采样间隔。
 
 需要对标签数据进行模板提取，并提取关键的信息，转化为下面的格式：
 
+
 anomaly_type应该包括下面几种：
 
-login failure，memory_anomalies，file moving program，normal memory freed label，access permission denied exception
+login failure，memory_anomalies，file moving program，normal memory freed label，access permission denied exception, cpu_anomalies
 
 ```
 index,datetime,service,instance,message,level,anomaly_type,st_time,ed_time,duration

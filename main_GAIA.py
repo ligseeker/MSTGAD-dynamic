@@ -45,12 +45,19 @@ if __name__ == '__main__':
     # 打印auto-detect后的实际维度
     logging.info(f"Actual dimensions: raw_node={args['raw_node']}, log_len={args['log_len']}, raw_edge={args['raw_edge']}")
 
+    loader_kwargs = {
+        'batch_size': args['batch_size'],
+        'num_workers': args['num_workers'],
+        'pin_memory': bool(args['pin_memory'] and args['gpu']),
+        'drop_last': True,
+    }
+    if args['num_workers'] > 0:
+        loader_kwargs['persistent_workers'] = args['persistent_workers']
+
     train_dl = DataLoader(processed.dataset[:int(len(processed.dataset) * 0.7)],
-                          batch_size=args['batch_size'],
-                          shuffle=True, pin_memory=False, drop_last=True)
+                          shuffle=True, **loader_kwargs)
     test_dl = DataLoader(processed.dataset[int(len(processed.dataset) * 0.7):],
-                         batch_size=args['batch_size'],
-                         shuffle=False, pin_memory=False, drop_last=True)
+                         shuffle=False, **loader_kwargs)
 
     # declare model and train
     import src.model as model

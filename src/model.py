@@ -38,6 +38,8 @@ class MyModel(nn.Module):
 		self.trace2pod = torch.nn.functional.one_hot(adj[0], num_classes=self.graph.shape[0]) \
 			+ torch.nn.functional.one_hot(adj[1], num_classes=self.graph.shape[0])
 		self.trace2pod = self.trace2pod / 2
+		self.register_buffer('edge_src', adj[0].long())
+		self.register_buffer('edge_dst', adj[1].long())
 
 		self.dense_node = nn.Linear(args['feature_node'], args['raw_node'])
 		self.dense_log = nn.Linear(args['feature_log'], args['log_len'])
@@ -52,9 +54,16 @@ class MyModel(nn.Module):
 			node_dim=args['feature_node'],
 			log_dim=args['feature_log'],
 			hidden_dim=args.get('graph_hidden', 16),
-			num_nodes=num_nodes
+			num_nodes=num_nodes,
+			summary_mode=args.get('graph_summary_mode', 'last')
 		)
 		self.graph_sparse_weight = args.get('graph_sparse_weight', 1e-3)
+		self.graph_update_steps = max(1, int(args.get('graph_update_steps', 4)))
+		self._cached_edge_weights = None
+		self._cached_graph_reg_loss = None
+		self._cached_graph_step = None
+		self._graph_cache_hits = 0
+		self._graph_cache_refreshes = 0
 
 		# === 创新点3: 对比学习 ===
 		self.contrastive_loss = ContrastiveLoss(
@@ -65,14 +74,58 @@ class MyModel(nn.Module):
 			temperature=args.get('contrast_temp', 0.1)
 		)
 
-	def forward(self, x, evaluate=False):
+	def reset_dynamic_graph_cache(self, reset_stats=False):
+		self._cached_edge_weights = None
+		self._cached_graph_reg_loss = None
+		self._cached_graph_step = None
+		if reset_stats:
+			self._graph_cache_hits = 0
+			self._graph_cache_refreshes = 0
+
+	def get_dynamic_graph_cache_stats(self):
+		total = self._graph_cache_hits + self._graph_cache_refreshes
+		hit_rate = self._graph_cache_hits / total if total > 0 else 0.0
+		return {
+			'hits': self._graph_cache_hits,
+			'refreshes': self._graph_cache_refreshes,
+			'hit_rate': hit_rate
+		}
+
+	def _compute_dynamic_graph(self, x_node, x_log):
+		edge_weights, graph_reg_loss = self.dynamic_graph_learner(x_node, x_log, self.graph)
+		return edge_weights, graph_reg_loss * self.graph_sparse_weight
+
+	def _get_dynamic_graph(self, x_node, x_log, evaluate=False, global_step=None):
+		if evaluate or (not self.training) or self.graph_update_steps <= 1:
+			if self.training and self.graph_update_steps <= 1:
+				self._graph_cache_refreshes += 1
+			return self._compute_dynamic_graph(x_node, x_log)
+
+		should_refresh = (
+			self._cached_edge_weights is None or
+			global_step is None or
+			(global_step % self.graph_update_steps == 0)
+		)
+		if should_refresh:
+			edge_weights, total_graph_reg = self._compute_dynamic_graph(x_node, x_log)
+			self._cached_edge_weights = edge_weights.detach()
+			self._cached_graph_reg_loss = total_graph_reg.detach()
+			self._cached_graph_step = global_step
+			self._graph_cache_refreshes += 1
+			return edge_weights, total_graph_reg
+
+		self._graph_cache_hits += 1
+		return self._cached_edge_weights, self._cached_graph_reg_loss
+
+	def forward(self, x, evaluate=False, global_step=None, compute_contrast=True):
 		x_node, d_node = self.node_emb(x['data_node'])
 		x_edge, d_edge = self.egde_emb(x['data_edge'])
 		x_log, d_log = self.log_emb(x['data_log'])
 
-		# === 创新点1: 动态图（只计算一次，共享边权重） ===
-		edge_weights, graph_reg_loss = self.dynamic_graph_learner(x_node, x_log, self.graph)
-		total_graph_reg = graph_reg_loss * self.graph_sparse_weight
+		# === 创新点1: 动态图低频更新（训练时缓存 K step） ===
+		edge_weights, total_graph_reg = self._get_dynamic_graph(
+			x_node, x_log, evaluate=evaluate, global_step=global_step
+		)
 
 		# 将动态学习到的边权重（软注意力掩膜）应用到边特征上
 		# edge_weights shape: [N, N]
@@ -86,8 +139,7 @@ class MyModel(nn.Module):
         
 		# 对于 l_edge (用于计算重构损失的标注)，保持原始的 x_edge 特征不受缩放影响
 		# 这类似于自编码器目标：尽管中间被掩膜/压缩，最终仍需努力还原真实的边特征
-		l_edge = torch.masked_select(x['data_edge'], self.graph.unsqueeze(-1).repeat(1, 1, x['data_edge'].shape[-1]).byte()) \
-			.reshape(x['data_edge'].shape[0], x['data_edge'].shape[1], -1, x['data_edge'].shape[-1])
+		l_edge = x['data_edge'][:, :, self.edge_src, self.edge_dst, :]
 
 		rec_node = torch.square(self.dense_node(node) - x['data_node'])
 		rec_edge1 = torch.square(self.dense_edge(edge) - l_edge)
@@ -130,7 +182,9 @@ class MyModel(nn.Module):
 			param = label_pod.shape[0] * label_pod.shape[1]
 			rec_loss = list(map(lambda x: x.sum() / param, rec_loss))
 
-			# === 创新点3: 计算对比损失 ===
-			contrast_loss = self.contrastive_loss(z_node, z_edge, z_log, node, edge, log)
+			if compute_contrast:
+				contrast_loss = self.contrastive_loss(z_node, z_edge, z_log, node, edge, log)
+			else:
+				contrast_loss = rec.new_zeros(())
 
 			return rec_loss, cls_result, cls_label, contrast_loss, total_graph_reg
