@@ -20,6 +20,8 @@ parser.add_argument("--learning_gamma", default=0.9, type=float,
                     help='the weight that change learning rate')
 parser.add_argument("--eval_interval", default=5, type=int,
                     help='evaluate every N epochs after warm-up')
+parser.add_argument("--train_eval_interval", default=1, type=int,
+                    help='evaluate train metrics every N epochs; 0 disables it')
 parser.add_argument("--label_weight", default=1e-2, type=float,
                     help='the unkown weight in reconstruction loss')
 parser.add_argument("--label_percent", default=0.5, type=float,
@@ -86,8 +88,6 @@ parser.add_argument("--contrast_warmup", default=2, type=int,
                     help='warm-up epochs for contrastive loss')
 parser.add_argument("--score_fusion_alpha", default=0.7, type=float,
                     help='weight of classification score in fused anomaly score')
-parser.add_argument("--use_amp", default=True, type=lambda x: x.lower() == "true",
-                    help='use automatic mixed precision on CUDA')
 
 # dataset setting
 parser.add_argument("--batch_size", default=32, type=int,

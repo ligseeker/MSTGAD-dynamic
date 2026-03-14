@@ -270,6 +270,8 @@ def deal_label(label_path, save_path, metric_timestamps=None):
     2. 生成逐30s时间步的标签矩阵 -> label.csv
        - 时间戳与metric对齐（对齐到30s网格）
        - INFO为正常，WARNING/ERROR中有异常跨度的30s窗口标记为1
+    3. 生成逐30s时间步的异常类型辅助标签
+       - label_type.csv: 每个服务节点在该窗口内对应的异常类型字符串
     """
     logger.info("Processing labels...")
     label_file = os.path.join(label_path, 'run_table_2021-07.csv')
@@ -322,6 +324,8 @@ def deal_label(label_path, save_path, metric_timestamps=None):
     # 初始化标签矩阵
     label_matrix = pd.DataFrame(0, index=timestamps, columns=GAIA_SERVICES)
     label_matrix.index.name = 'timestamp'
+    label_type_matrix = pd.DataFrame('[normal]', index=timestamps, columns=GAIA_SERVICES)
+    label_type_matrix.index.name = 'timestamp'
 
     # 将异常事件映射到时间步
     # 筛选非normal事件（st_time和ed_time都有值的）
@@ -331,6 +335,8 @@ def deal_label(label_path, save_path, metric_timestamps=None):
         (events_df['anomaly_type'] != '[normal]')
     ].copy()
     logger.info(f"Mapping {len(anomaly_events)} anomaly events to 30s windows...")
+
+    anomaly_types = sorted(anomaly_events['anomaly_type'].unique().tolist())
 
     for _, event in anomaly_events.iterrows():
         service = event['instance']
@@ -358,17 +364,42 @@ def deal_label(label_path, save_path, metric_timestamps=None):
             # ERROR等瞬时事件，只标记一个窗口
             if st_ms_aligned in label_matrix.index:
                 label_matrix.loc[st_ms_aligned, service] = 1
+                current_type = label_type_matrix.loc[st_ms_aligned, service]
+                if current_type == '[normal]':
+                    label_type_matrix.loc[st_ms_aligned, service] = event['anomaly_type']
+                elif event['anomaly_type'] not in current_type.split('|'):
+                    label_type_matrix.loc[st_ms_aligned, service] = current_type + '|' + event['anomaly_type']
         else:
             mask = (label_matrix.index >= st_ms_aligned) & (label_matrix.index <= ed_ms_aligned)
             label_matrix.loc[mask, service] = 1
+            matched_timestamps = label_matrix.index[mask]
+            for ts in matched_timestamps:
+                current_type = label_type_matrix.loc[ts, service]
+                if current_type == '[normal]':
+                    label_type_matrix.loc[ts, service] = event['anomaly_type']
+                elif event['anomaly_type'] not in current_type.split('|'):
+                    label_type_matrix.loc[ts, service] = current_type + '|' + event['anomaly_type']
 
     label_matrix.to_csv(os.path.join(save_path, 'label.csv'), index=True)
     logger.info(f"Saved label.csv with {len(label_matrix)} timesteps")
+
+    label_type_matrix.to_csv(os.path.join(save_path, 'label_type.csv'), index=True)
+    logger.info(f"Saved label_type.csv with {len(label_type_matrix)} timesteps")
 
     # 统计
     for svc in GAIA_SERVICES:
         n_anomaly = (label_matrix[svc] == 1).sum()
         logger.info(f"  {svc}: {n_anomaly} anomalous / {len(label_matrix)} total ({100*n_anomaly/len(label_matrix):.2f}%)")
+
+    type_cover_counts = {}
+    for anomaly_type in anomaly_types:
+        type_cover_counts[anomaly_type] = int(
+            label_type_matrix.apply(lambda col: col.astype(str).str.contains(anomaly_type, regex=False)).values.sum()
+        )
+    if type_cover_counts:
+        logger.info("Aligned anomaly type coverage:")
+        for anomaly_type, count in sorted(type_cover_counts.items(), key=lambda item: (-item[1], item[0])):
+            logger.info(f"  {anomaly_type}: {count}")
 
     return label_matrix
 

@@ -6,7 +6,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 from adabelief_pytorch import AdaBelief
-from torch.cuda.amp import GradScaler, autocast
 
 from tqdm import tqdm
 import util.util as util
@@ -27,6 +26,7 @@ class Base(nn.Module):
         self.learning_change = args['learning_change']
         self.learning_gamma = args['learning_gamma']
         self.eval_interval = args.get('eval_interval', 5)
+        self.train_eval_interval = max(0, int(args.get('train_eval_interval', 1)))
         self.rec_down = args['rec_down']
         self.para_low = args['para_low']
         self.True_list = {'normal': 1, 'abnormal': args['abnormal_weight']}
@@ -97,7 +97,6 @@ class MY(Base):
         self.graph_summary_mode = args.get('graph_summary_mode', 'last')
         self.contrast_summary_mode = args.get('contrast_summary_mode', 'last')
         self.score_fusion_alpha = float(args.get('score_fusion_alpha', 1.0))
-        self.use_amp = bool(args.get('use_amp', True) and self.device.type == 'cuda')
 
     def _contrast_gamma(self, epoch):
         if self.contrast_weight <= 0 or epoch < self.contrast_start_epoch:
@@ -110,7 +109,6 @@ class MY(Base):
     def fit(self, train_loader, test_loader, **args):
         optimizer = AdaBelief(self.model.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, self.learning_change, self.learning_gamma)
-        scaler = GradScaler(enabled=self.use_amp)
 
         best = {"loss":{"score": float("inf"), "state": None, "epoch": 0},
                 "f1":{"score": 0, "state": None, "epoch": 0}}
@@ -132,7 +130,9 @@ class MY(Base):
         logging.info(
             f'  contrast_summary_mode={self.contrast_summary_mode}, score_fusion_alpha={self.score_fusion_alpha}'
         )
-        logging.info(f'  eval_interval={self.eval_interval}, use_amp={self.use_amp}')
+        logging.info(
+            f'  eval_interval={self.eval_interval}, train_eval_interval={self.train_eval_interval}, precision=float32'
+        )
         global_step = 0
 
         for epoch in range(0, self.epoches):
@@ -156,33 +156,30 @@ class MY(Base):
                     batch_input = self.input2device(batch_input, self.use_gpu)
                     optimizer.zero_grad()
 
-                    with autocast(enabled=self.use_amp):
-                        # 模型现在返回5个值: rec_loss, cls_result, cls_label, contrast_loss, graph_reg_loss
-                        raw_loss, cls_result, cls_label, contrast_loss, graph_reg_loss = self.model(
-                            batch_input,
-                            global_step=global_step,
-                            compute_contrast=compute_contrast
-                        )
+                    # 真实 MSDS 上 AMP 会触发非有限 loss，这里固定使用 float32 训练。
+                    raw_loss, cls_result, cls_label, contrast_loss, graph_reg_loss = self.model(
+                        batch_input,
+                        global_step=global_step,
+                        compute_contrast=compute_contrast
+                    )
 
-                        rec_loss = sum(raw_loss)
-                        if cls_result.shape[0] == 0:
-                            cls_loss = torch.zeros((), dtype=torch.float32, device=self.device)
-                        else:
-                            cls_loss = losser(cls_result, cls_label)
+                    rec_loss = sum(raw_loss)
+                    if cls_result.shape[0] == 0:
+                        cls_loss = torch.zeros((), dtype=torch.float32, device=self.device)
+                    else:
+                        cls_loss = losser(cls_result, cls_label)
 
-                        # === 综合损失 = 分类损失 + 重构损失 + 对比损失 + 图正则化 ===
-                        loss = (1 - para) * cls_loss + para * rec_loss + gamma * contrast_loss + graph_reg_loss
+                    # === 综合损失 = 分类损失 + 重构损失 + 对比损失 + 图正则化 ===
+                    loss = (1 - para) * cls_loss + para * rec_loss + gamma * contrast_loss + graph_reg_loss
 
                     if not torch.isfinite(loss):
                         isWrong = True
                         logging.info("loss is not finite")
                         break
 
-                    scaler.scale(loss).backward()
-                    scaler.unscale_(optimizer)
+                    loss.backward()
                     nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=10, norm_type=2)
-                    scaler.step(optimizer)
-                    scaler.update()
+                    optimizer.step()
                     global_step += 1
 
                     epoch_cls_loss.append(cls_loss.item())
@@ -244,10 +241,27 @@ class MY(Base):
             except Exception:
                 pass
 
+            if self.train_eval_interval > 0 and (
+                (epoch + 1) % self.train_eval_interval == 0 or epoch == self.epoches - 1
+            ):
+                if hasattr(self.model, 'reset_dynamic_graph_cache'):
+                    self.model.reset_dynamic_graph_cache()
+                train_result = self.evaluate(train_loader)
+                logging.info(
+                    "[train] pr:{pr:.4f}  rc:{rc:.4f}  auc:{auc:.4f} ap:{ap:.4f} f1:{f1:.4f}".format(
+                        **train_result
+                    )
+                )
+
             if epoch > self.rec_down and ((epoch + 1) % self.eval_interval == 0 or epoch == self.epoches - 1):
                 if hasattr(self.model, 'reset_dynamic_graph_cache'):
                     self.model.reset_dynamic_graph_cache()
                 result = self.evaluate(test_loader)
+                logging.info(
+                    "[test] pr:{pr:.4f}  rc:{rc:.4f}  auc:{auc:.4f} ap:{ap:.4f} f1:{f1:.4f}".format(
+                        **result
+                    )
+                )
                 if float(result['f1']) >= best["f1"]["score"]:
                     best["f1"]["score"] = float(result['f1'])
                     best["f1"]["state"] = copy.deepcopy(self.model.state_dict())
