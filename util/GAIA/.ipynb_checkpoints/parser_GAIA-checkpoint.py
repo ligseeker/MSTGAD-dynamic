@@ -6,9 +6,9 @@ parser.add_argument("--random_seed", default=42,
 
 # training setting
 parser.add_argument("--gpu", default=True, type=lambda x: x.lower() == "true")
-parser.add_argument("--epochs", default=300, type=int,
+parser.add_argument("--epochs", default=50, type=int,
                     help='the number of training epochs')
-parser.add_argument("--patience", default=15, type=float,
+parser.add_argument("--patience", default=10, type=float,
                     help='the number of epoch that loss is uping')
 parser.add_argument("--learning_rate", default=1e-3,
                     type=float, help='the data number at one epoch')
@@ -86,7 +86,7 @@ parser.add_argument("--num_nodes", default=10, type=int,
                     help='the number of service nodes in GAIA')
 
 # path setting
-parser.add_argument("--data_path", default='../DAG_dynamic_fusion_gaia/data/GAIA-pre',
+parser.add_argument("--data_path", default='../MSTGAD-GAIA/data/GAIA-pre',
                     type=str, help='the path of preprocessed data')
 parser.add_argument("--dataset_path", default="./data/GAIA-save",
                     type=str, help='the path of saving windowed data')
