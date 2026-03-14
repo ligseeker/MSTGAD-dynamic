@@ -10,34 +10,122 @@ import torch
 from sklearn.metrics import *
 
 
+def _to_numpy(data):
+    if isinstance(data, torch.Tensor):
+        return data.detach().cpu().numpy()
+    return np.asarray(data)
+
+
+def prepare_binary_classification_inputs(predict, actual):
+    predict = _to_numpy(predict)
+    actual = _to_numpy(actual)
+
+    if predict.ndim > 2:
+        predict = predict.reshape(-1, predict.shape[-1])
+    if actual.ndim > 2:
+        actual = actual.reshape(-1, actual.shape[-1])
+
+    if predict.ndim == 2 and predict.shape[-1] >= 2:
+        score = predict[:, 1].astype(float)
+    else:
+        score = predict.reshape(-1).astype(float)
+
+    if actual.ndim == 2 and actual.shape[-1] >= 2:
+        label = np.argmax(actual, axis=-1).astype(int)
+    else:
+        label = actual.reshape(-1).astype(int)
+
+    return score.reshape(-1), label.reshape(-1)
+
+
+def find_best_f1_threshold(score, label, default_threshold=0.5):
+    score = np.asarray(score, dtype=float).reshape(-1)
+    label = np.asarray(label, dtype=int).reshape(-1)
+
+    if score.size == 0 or label.size == 0:
+        return float(default_threshold)
+    if len(np.unique(label)) < 2:
+        return float(default_threshold)
+
+    precision, recall, thresholds = precision_recall_curve(label, score)
+    if thresholds.size == 0:
+        return float(default_threshold)
+
+    f1_scores = 2 * precision[:-1] * recall[:-1] / np.clip(precision[:-1] + recall[:-1], 1e-12, None)
+    best_idx = int(np.nanargmax(f1_scores))
+    return float(np.clip(thresholds[best_idx], 0.0, 1.0))
+
+
+def calc_binary_score_metrics(score, label, threshold=0.5, zero_division=1, raw_predict=None, raw_actual=None):
+    score = np.asarray(score, dtype=float).reshape(-1)
+    label = np.asarray(label, dtype=int).reshape(-1)
+    threshold = float(threshold)
+    pred = (score >= threshold).astype(int)
+
+    if raw_predict is not None and raw_actual is not None:
+        raw_predict = _to_numpy(raw_predict)
+        raw_actual = _to_numpy(raw_actual)
+        if raw_predict.ndim > 2:
+            raw_predict = raw_predict.reshape(-1, raw_predict.shape[-1])
+        if raw_actual.ndim > 2:
+            raw_actual = raw_actual.reshape(-1, raw_actual.shape[-1])
+        try:
+            ap = float(average_precision_score(raw_actual, raw_predict, average='macro'))
+        except ValueError:
+            ap = float("nan")
+        try:
+            auc = float(roc_auc_score(raw_actual, raw_predict, average='macro'))
+        except ValueError:
+            auc = float("nan")
+    else:
+        try:
+            ap = float(average_precision_score(label, score))
+        except ValueError:
+            ap = float("nan")
+        try:
+            auc = float(roc_auc_score(label, score))
+        except ValueError:
+            auc = float("nan")
+
+    ps = float(precision_score(label, pred, average="binary", zero_division=zero_division))
+    rs = float(recall_score(label, pred, average="binary", zero_division=zero_division))
+    effection = float(f1_score(label, pred, average="binary", zero_division=zero_division))
+
+    pred_count = np.bincount(pred, minlength=2)
+    actu_count = np.bincount(label, minlength=2)
+
+    return {
+        'pr': ps,
+        'rc': rs,
+        'auc': auc,
+        'ap': ap,
+        'f1': effection,
+        'threshold': threshold,
+        'pred_right': int(pred_count[0]),
+        'pred_wrong': int(pred_count[1]),
+        'actu_right': int(actu_count[0]),
+        'actu_wrong': int(actu_count[1]),
+    }
+
+
+def format_binary_metrics(metrics):
+    return (
+        f"pr:{metrics['pr']:.4f}  rc:{metrics['rc']:.4f}  auc:{metrics['auc']:.4f} "
+        f"ap:{metrics['ap']:.4f} f1: {metrics['f1']:.4f} "
+        f"pred_right: {metrics['pred_right']} pred_wrong:{metrics['pred_wrong']} "
+        f"actu_right: {metrics['actu_right']} actu_wrong: {metrics['actu_wrong']}"
+    )
+
+
 def calc_index(predict, actual):
     """
     calculate f1 score by predict and actual.
     """
-    if predict.dim() != 2:
-        predict = predict.reshape(-1, predict.shape[-1])
-    if actual.dim() != 2:
-        actual = actual.reshape(-1, actual.shape[-1])
-
-    ap = average_precision_score(actual, predict, average='macro').tolist()
-    auc = roc_auc_score(actual, predict, average='macro').tolist()
-
-    if predict.shape[-1] == 2 and actual.shape[-1] == 2:
-        actual, predict = torch.argmax(actual, dim=-1), torch.argmax(predict, dim=-1)
-
-    ps = precision_score(actual, predict, average="binary").tolist()
-    rs = recall_score(actual, predict, average="binary").tolist()
-    effection = f1_score(actual, predict, average="binary", zero_division=1).tolist()
-
-    pred = np.bincount(predict)
-    actu = np.bincount(actual)
-
-    if pred.shape[0] == 1:
-        information = f'pr:{ps:.4f}  rc:{rs:.4f}  auc:{auc:.4f} ap:{ap:.4f} f1: {effection:.4f} pred_right: {pred[0]} pred_wrong: 0  actu_right: {actu[0]} actu_wrong: {actu[1]}'
-    else:
-        information = f'pr:{ps:.4f}  rc:{rs:.4f}  auc:{auc:.4f} ap:{ap:.4f} f1: {effection:.4f} pred_right: {pred[0]} pred_wrong:{pred[1]} actu_right: {actu[0]} actu_wrong: {actu[1]}'
+    score, label = prepare_binary_classification_inputs(predict, actual)
+    metrics = calc_binary_score_metrics(score, label, threshold=0.5)
+    information = format_binary_metrics(metrics)
     logging.info(information)
-    return information, {'pr':ps, 'rc':rs, 'auc':auc, 'ap':ap, 'f1':effection}
+    return information, {key: metrics[key] for key in ['pr', 'rc', 'auc', 'ap', 'f1']}
 
 
 def json_pretty_dump(obj, filename):

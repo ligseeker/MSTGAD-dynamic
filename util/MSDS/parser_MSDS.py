@@ -18,10 +18,26 @@ parser.add_argument("--learning_change", default=100, type=int,
                     help='the epoch number that change learning rate')
 parser.add_argument("--learning_gamma", default=0.9, type=float,
                     help='the weight that change learning rate')
-parser.add_argument("--eval_interval", default=5, type=int,
+parser.add_argument("--eval_interval", default=1, type=int,
                     help='evaluate every N epochs after warm-up')
 parser.add_argument("--train_eval_interval", default=1, type=int,
                     help='evaluate train metrics every N epochs; 0 disables it')
+parser.add_argument("--split_mode", default='baseline70_30', type=str,
+                    choices=['baseline70_30', 'formal60_10_30'],
+                    help='dataset split protocol')
+parser.add_argument("--val_ratio", default=0.1, type=float,
+                    help='validation ratio used by formal60_10_30 protocol')
+parser.add_argument("--score_threshold_mode", default='val_f1', type=str,
+                    choices=['val_f1', 'manual'],
+                    help='threshold selection strategy for anomaly score')
+parser.add_argument("--score_threshold", default=None, type=float,
+                    help='manual anomaly threshold, only used when score_threshold_mode=manual')
+parser.add_argument("--best_metric", default='val_f1', type=str,
+                    help='metric used to select best_f1 checkpoint')
+parser.add_argument("--early_stop_metric", default='val_f1', type=str,
+                    help='metric used by early stopping')
+parser.add_argument("--early_stop_patience", default=6, type=int,
+                    help='number of evaluation rounds without improvement before early stop')
 parser.add_argument("--label_weight", default=1e-2, type=float,
                     help='the unkown weight in reconstruction loss')
 parser.add_argument("--label_percent", default=0.5, type=float,

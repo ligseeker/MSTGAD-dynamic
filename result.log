@@ -153,3 +153,15 @@ f1   pr:0.0213  rc:0.8915  auc:0.8483 ap:0.5889 f1: 0.0417 pred_right: 11109 pre
  MSTGAD-755ca97b --weight_decay:0.0005   --learning_change:100 
 loss   pr:0.1257  rc:0.8000  auc:0.7995 ap:0.8296 f1: 0.2172 pred_right: 129 pred_wrong:191 actu_right: 290 actu_wrong: 30
 f1   pr:0.1257  rc:0.8000  auc:0.7995 ap:0.8296 f1: 0.2172 pred_right: 129 pred_wrong:191 actu_right: 290 actu_wrong: 30
+
+ MSTGAD-65b6a4b9 --weight_decay:0.0005   --learning_change:100 --split_mode:baseline70_30
+loss   pr:0.0213  rc:0.8915  auc:0.8483 ap:0.1819 f1: 0.0417 pred_right: 11109 pred_wrong:5391 actu_right: 16371 actu_wrong: 129
+f1   pr:0.0213  rc:0.8915  auc:0.8483 ap:0.1819 f1: 0.0417 pred_right: 11109 pred_wrong:5391 actu_right: 16371 actu_wrong: 129
+
+ MSTGAD-2ce32ca2 --weight_decay:0.0005   --learning_change:100 --split_mode:formal60_10_30
+loss   pr:0.4082  rc:0.1550  auc:0.8608 ap:0.5725 f1: 0.2247 pred_right: 16451 pred_wrong:49 actu_right: 16371 actu_wrong: 129
+f1   pr:0.4082  rc:0.1550  auc:0.8608 ap:0.5725 f1: 0.2247 pred_right: 16451 pred_wrong:49 actu_right: 16371 actu_wrong: 129
+
+ MSTGAD-b582e6bc --weight_decay:0.0005   --learning_change:100 --split_mode:formal60_10_30
+loss   pr:0.9561  rc:0.8450  auc:0.9900 ap:0.9297 f1: 0.8971 pred_right: 16386 pred_wrong:114 actu_right: 16371 actu_wrong: 129
+f1   pr:0.9213  rc:0.9070  auc:0.9955 ap:0.9610 f1: 0.9141 pred_right: 16373 pred_wrong:127 actu_right: 16371 actu_wrong: 129
