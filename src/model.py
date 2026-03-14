@@ -71,7 +71,8 @@ class MyModel(nn.Module):
 			edge_dim=args['feature_edge'],
 			log_dim=args['feature_log'],
 			proj_dim=args.get('contrast_proj_dim', 32),
-			temperature=args.get('contrast_temp', 0.1)
+			temperature=args.get('contrast_temp', 0.1),
+			summary_mode=args.get('contrast_summary_mode', 'last')
 		)
 
 	def reset_dynamic_graph_cache(self, reset_stats=False):
@@ -117,7 +118,7 @@ class MyModel(nn.Module):
 		self._graph_cache_hits += 1
 		return self._cached_edge_weights, self._cached_graph_reg_loss
 
-	def forward(self, x, evaluate=False, global_step=None, compute_contrast=True):
+	def forward(self, x, evaluate=False, global_step=None, compute_contrast=True, return_eval_aux=False):
 		x_node, d_node = self.node_emb(x['data_node'])
 		x_edge, d_edge = self.egde_emb(x['data_edge'])
 		x_log, d_log = self.log_emb(x['data_log'])
@@ -151,7 +152,10 @@ class MyModel(nn.Module):
 
 		if evaluate:
 			rec = rec[:, -1].squeeze()
+			rec_score = torch.sum(rec, dim=-1)
 			cls_result = torch.softmax(self.show(rec), dim=-1)
+			if return_eval_aux:
+				return cls_result, x['groundtruth_cls'], rec_score
 			return cls_result, x['groundtruth_cls']
 		else:
 			cls_label = x['groundtruth_cls']

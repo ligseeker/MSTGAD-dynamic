@@ -50,7 +50,7 @@ class Process:
         self.max_timesteps = args.get('max_timesteps', 0)
         self.set, self.dataset, self.trace_type = {}, [], []
 
-        if os.path.exists(self.dataset_path):
+        if self._dataset_cache_is_fresh():
             self.read_data()
             self.graph = read_graph(data_dir=self.rawdata_path)
         else:
@@ -59,6 +59,22 @@ class Process:
             logging.info("Transform data into time windows")
             self.dataset = self._transform()
             self.save_data()
+
+    def _dataset_cache_is_fresh(self):
+        dataset_file = os.path.join(self.dataset_path, 'dataset.pkl')
+        if not os.path.exists(dataset_file):
+            return False
+
+        raw_dependencies = [
+            'metric.csv', 'label.csv', 'log.csv', 'trace.csv', 'trace_path.pkl'
+        ]
+        dataset_mtime = os.path.getmtime(dataset_file)
+        for filename in raw_dependencies:
+            path = os.path.join(self.rawdata_path, filename)
+            if os.path.exists(path) and os.path.getmtime(path) > dataset_mtime:
+                logging.info(f"Rebuilding dataset cache because {filename} is newer than dataset.pkl")
+                return False
+        return True
 
     def load_raw(self):
         """加载预处理后的原始多模态数据（内存优化版）"""
@@ -116,10 +132,16 @@ class Process:
 
         # 检查是否有缓存缓存文件
         cache_file = os.path.join(self.rawdata_path, 'metric_aggregated.pkl')
-        if os.path.exists(cache_file):
+        use_metric_cache = (
+            os.path.exists(cache_file) and
+            os.path.getmtime(cache_file) >= os.path.getmtime(metric_csv)
+        )
+        if use_metric_cache:
             logging.info(f"Loading aggregated metric data from cache: {cache_file}")
             all_grouped = pickle.load(open(cache_file, 'rb'))
         else:
+            if os.path.exists(cache_file):
+                logging.info(f"Ignoring stale aggregated metric cache: {cache_file}")
             for chunk in tqdm(pd.read_csv(metric_csv, usecols=needed_cols, chunksize=chunk_size),
                               desc='Reading metric chunks'):
                 total_rows += len(chunk)
@@ -218,7 +240,11 @@ class Process:
         log_csv = os.path.join(self.rawdata_path, 'log.csv')
         log_df = pd.read_csv(log_csv)
         template_cols = sorted([c for c in log_df.columns if c.startswith('template_')])
-        actual_log_len = len(template_cols)
+        level_cols = [c for c in ['level_INFO', 'level_WARNING', 'level_ERROR', 'level_DEBUG', 'level_UNKNOWN']
+                      if c in log_df.columns]
+        extra_log_cols = [c for c in ['log_total'] if c in log_df.columns]
+        log_feature_cols = template_cols + level_cols + extra_log_cols
+        actual_log_len = len(log_feature_cols)
 
         # Auto-detect log_len
         if self.log_len == 0 or self.log_len > actual_log_len:
@@ -227,7 +253,10 @@ class Process:
             logging.info(f"Auto-detected log_len = {actual_log_len}")
         else:
             actual_log_len = self.log_len
-        logging.info(f"Log templates: {len(template_cols)}, using {actual_log_len}")
+        logging.info(
+            f"Log features: templates={len(template_cols)}, levels={len(level_cols)}, extras={len(extra_log_cols)}, "
+            f"using {actual_log_len}"
+        )
 
         # 构建日志特征矩阵
         logging.info("Building log feature matrix...")
@@ -239,10 +268,10 @@ class Process:
         ts_set = set(valid_timestamps.tolist())
         log_df_valid = log_df[log_df['timestamp'].isin(ts_set)].copy()
 
-        use_template_cols = template_cols[:actual_log_len]
+        use_log_cols = log_feature_cols[:actual_log_len]
 
         # 归一化参数
-        log_values = log_df_valid[use_template_cols].values.astype(float)
+        log_values = log_df_valid[use_log_cols].values.astype(float)
         max_record = np.zeros(actual_log_len)
         min_record = np.ones(actual_log_len) * np.inf
         if len(log_values) > 0:
@@ -258,7 +287,7 @@ class Process:
         for svc_idx, group in log_df_valid.groupby('svc_idx'):
             for _, row in group.iterrows():
                 ts = int(row['timestamp'])
-                log_record[ts][int(svc_idx), :] = row[use_template_cols].values.astype(float)
+                log_record[ts][int(svc_idx), :] = row[use_log_cols].values.astype(float)
 
         # 归一化
         dis = max_record - min_record + 1e-6
@@ -289,31 +318,54 @@ class Process:
         trace_df = trace_df.dropna(subset=['sc_idx'])
         trace_df['sc_idx'] = trace_df['sc_idx'].astype(int)
 
-        # 兼容不同的列名命名
-        if 'service_name' not in trace_df.columns and 'service' in trace_df.columns:
-            trace_df = trace_df.rename(columns={'service': 'service_name'})
-            
-        if 'service_name' not in trace_df.columns:
-            # 记录此时的 columns 以便调试
-            logging.error(f"trace.csv 缺少 service_name 列，现有列: {trace_df.columns.tolist()}")
-            raise KeyError("service_name")
-
-        trace_df['svc_idx'] = trace_df['service_name'].map(svc_to_idx)
-        trace_df = trace_df.dropna(subset=['svc_idx'])
-        trace_df['svc_idx'] = trace_df['svc_idx'].astype(int)
-
         ts_to_idx = {int(ts): i for i, ts in enumerate(valid_timestamps)}
         trace_valid = trace_df[trace_df['timestamp_aligned'].isin(ts_set)].copy()
         trace_valid['ts_idx'] = trace_valid['timestamp_aligned'].map(ts_to_idx)
         logging.info(f"Valid trace records: {len(trace_valid)} / {len(trace_df)}")
 
-        if len(trace_valid) > 0:
-            agg = trace_valid.groupby(['ts_idx', 'svc_idx', 'sc_idx'])['duration_sum'].sum().reset_index()
-            ts_indices = agg['ts_idx'].values.astype(int)
-            svc_indices = agg['svc_idx'].values.astype(int)
-            sc_indices = agg['sc_idx'].values.astype(int)
-            duration_values = agg['duration_sum'].values
-            trace_data[ts_indices, svc_indices, svc_indices, sc_indices] = duration_values
+        # 优先使用新格式的 directed edge trace.csv
+        has_directed_edges = {'src_service', 'dst_service'}.issubset(trace_valid.columns)
+        if has_directed_edges:
+            trace_valid['src_idx'] = trace_valid['src_service'].map(svc_to_idx)
+            trace_valid['dst_idx'] = trace_valid['dst_service'].map(svc_to_idx)
+            trace_valid = trace_valid.dropna(subset=['src_idx', 'dst_idx'])
+            trace_valid['src_idx'] = trace_valid['src_idx'].astype(int)
+            trace_valid['dst_idx'] = trace_valid['dst_idx'].astype(int)
+
+            if len(trace_valid) > 0:
+                agg = trace_valid.groupby(
+                    ['ts_idx', 'src_idx', 'dst_idx', 'sc_idx']
+                )['duration_sum'].sum().reset_index()
+                ts_indices = agg['ts_idx'].values.astype(int)
+                src_indices = agg['src_idx'].values.astype(int)
+                dst_indices = agg['dst_idx'].values.astype(int)
+                sc_indices = agg['sc_idx'].values.astype(int)
+                duration_values = agg['duration_sum'].values
+                trace_data[ts_indices, src_indices, dst_indices, sc_indices] = duration_values
+            logging.info("Using directed trace edge features (src_service -> dst_service)")
+        else:
+            # 兼容旧版 trace.csv：只有 service_name，没有真实边信息，只能退化为 self-loop
+            if 'service_name' not in trace_df.columns and 'service' in trace_df.columns:
+                trace_df = trace_df.rename(columns={'service': 'service_name'})
+                trace_valid = trace_df[trace_df['timestamp_aligned'].isin(ts_set)].copy()
+                trace_valid['ts_idx'] = trace_valid['timestamp_aligned'].map(ts_to_idx)
+
+            if 'service_name' not in trace_valid.columns:
+                logging.error(f"trace.csv 缺少 directed edge 列和 service_name 列，现有列: {trace_df.columns.tolist()}")
+                raise KeyError("src_service/dst_service or service_name")
+
+            trace_valid['svc_idx'] = trace_valid['service_name'].map(svc_to_idx)
+            trace_valid = trace_valid.dropna(subset=['svc_idx'])
+            trace_valid['svc_idx'] = trace_valid['svc_idx'].astype(int)
+
+            if len(trace_valid) > 0:
+                agg = trace_valid.groupby(['ts_idx', 'svc_idx', 'sc_idx'])['duration_sum'].sum().reset_index()
+                ts_indices = agg['ts_idx'].values.astype(int)
+                svc_indices = agg['svc_idx'].values.astype(int)
+                sc_indices = agg['sc_idx'].values.astype(int)
+                duration_values = agg['duration_sum'].values
+                trace_data[ts_indices, svc_indices, svc_indices, sc_indices] = duration_values
+            logging.warning("Using legacy self-loop trace features; re-run util.GAIA.pre_GAIA for directed edges")
 
         # 归一化trace
         trace_mean = trace_data.mean(axis=0)

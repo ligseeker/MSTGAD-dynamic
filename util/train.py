@@ -95,6 +95,8 @@ class MY(Base):
         self.contrast_start_epoch = max(0, int(args.get('contrast_start_epoch', self.contrast_warmup)))
         self.graph_update_steps = max(1, int(args.get('graph_update_steps', 4)))
         self.graph_summary_mode = args.get('graph_summary_mode', 'last')
+        self.contrast_summary_mode = args.get('contrast_summary_mode', 'last')
+        self.score_fusion_alpha = float(args.get('score_fusion_alpha', 1.0))
         self.use_amp = bool(args.get('use_amp', True) and self.device.type == 'cuda')
 
     def _contrast_gamma(self, epoch):
@@ -126,6 +128,9 @@ class MY(Base):
         )
         logging.info(
             f'  graph_update_steps={self.graph_update_steps}, graph_summary_mode={self.graph_summary_mode}'
+        )
+        logging.info(
+            f'  contrast_summary_mode={self.contrast_summary_mode}, score_fusion_alpha={self.score_fusion_alpha}'
         )
         logging.info(f'  eval_interval={self.eval_interval}, use_amp={self.use_amp}')
         global_step = 0
@@ -258,16 +263,25 @@ class MY(Base):
         if hasattr(self.model, 'reset_dynamic_graph_cache'):
             self.model.reset_dynamic_graph_cache(reset_stats=True)
         with torch.no_grad():
-            predict_list, label_list = [], []
+            predict_list, label_list, rec_score_list = [], [], []
             for batch_input in tqdm(test_loader):
                     batch_input = self.input2device(batch_input,self.use_gpu)
-                    raw_result, _ = self.model(batch_input, evaluate=True)
+                    if self.score_fusion_alpha < 1.0:
+                        raw_result, _, rec_score = self.model(
+                            batch_input, evaluate=True, return_eval_aux=True
+                        )
+                        rec_score_list.append(rec_score)
+                    else:
+                        raw_result, _ = self.model(batch_input, evaluate=True)
 
                     predict_list.append(raw_result)
                     label_list.append(batch_input['groundtruth_real'])
 
             predict_list = torch.concat(predict_list, dim=0).cpu()
             label_list = torch.concat(label_list, dim=0).cpu()
+            if self.score_fusion_alpha < 1.0 and rec_score_list:
+                rec_score_list = torch.concat(rec_score_list, dim=0).reshape(-1).cpu()
+                predict_list = self._fuse_predict_with_reconstruction(predict_list, rec_score_list)
 
             info, result = util.calc_index(predict_list, label_list)
 
@@ -275,3 +289,18 @@ class MY(Base):
                 return info
             else:
                 return result
+
+    def _fuse_predict_with_reconstruction(self, predict_list, rec_scores):
+        cls_probs = predict_list.reshape(-1, predict_list.shape[-1])
+        rec_scores = rec_scores.reshape(-1)
+        rec_probs = self._reconstruction_energy_to_prob(rec_scores)
+        alpha = min(max(self.score_fusion_alpha, 0.0), 1.0)
+        fused_anomaly = alpha * cls_probs[:, 1] + (1 - alpha) * rec_probs
+        fused_anomaly = fused_anomaly.clamp(0.0, 1.0)
+        return torch.stack([1 - fused_anomaly, fused_anomaly], dim=-1)
+
+    def _reconstruction_energy_to_prob(self, rec_scores):
+        median = torch.median(rec_scores)
+        mad = torch.median(torch.abs(rec_scores - median)).clamp_min(1e-6)
+        normalized = (rec_scores - median) / (1.4826 * mad)
+        return torch.sigmoid(normalized)

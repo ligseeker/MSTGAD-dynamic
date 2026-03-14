@@ -64,7 +64,7 @@ parser.add_argument("--graph_hidden", default=16, type=int,
                     help='hidden dim for dynamic graph learner')
 parser.add_argument("--graph_sparse_weight", default=1e-3, type=float,
                     help='graph regularization weight (sparsity + KL)')
-parser.add_argument("--graph_update_steps", default=4, type=int,
+parser.add_argument("--graph_update_steps", default=2, type=int,
                     help='refresh dynamic graph every N training steps')
 parser.add_argument("--graph_summary_mode", default='last', type=str,
                     choices=['last', 'mean'],
@@ -76,10 +76,15 @@ parser.add_argument("--contrast_temp", default=0.1, type=float,
                     help='InfoNCE temperature')
 parser.add_argument("--contrast_proj_dim", default=32, type=int,
                     help='projection dim for contrastive head')
-parser.add_argument("--contrast_start_epoch", default=5, type=int,
+parser.add_argument("--contrast_summary_mode", default='last', type=str,
+                    choices=['last', 'mean'],
+                    help='feature summary mode for contrastive learning')
+parser.add_argument("--contrast_start_epoch", default=1, type=int,
                     help='delay contrastive branch until this epoch')
-parser.add_argument("--contrast_warmup", default=5, type=int,
+parser.add_argument("--contrast_warmup", default=2, type=int,
                     help='warm-up epochs for contrastive loss')
+parser.add_argument("--score_fusion_alpha", default=0.7, type=float,
+                    help='weight of classification score in fused anomaly score')
 parser.add_argument("--use_amp", default=True, type=lambda x: x.lower() == "true",
                     help='use automatic mixed precision on CUDA')
 

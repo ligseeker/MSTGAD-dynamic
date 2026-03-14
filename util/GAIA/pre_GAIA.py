@@ -1,6 +1,6 @@
 """
 GAIA数据集预处理脚本
-将原始GAIA数据（MicroSS_part）转换为MSTGAD所需的中间格式。
+将原始GAIA数据（MicroSS）转换为MSTGAD所需的中间格式。
 
 输出到 data/GAIA-pre/ 目录：
   - label_events.csv  : 提取后的异常事件表（含起止时间、异常类型等）
@@ -38,7 +38,7 @@ warnings.filterwarnings("ignore")
 from util.GAIA.constant import *
 
 # ============ 路径配置 ============
-Raw_Path = './data/GAIA/MicroSS_part'
+Raw_Path = './data/GAIA/MicroSS'
 Save_Path = './data/GAIA-pre'
 
 BUSINESS_DIR = os.path.join(Raw_Path, 'business', 'business_split', 'business')
@@ -383,7 +383,7 @@ def deal_log(business_path, save_path):
     1. 读取10个business CSV文件
     2. 从message提取时间戳（注意时区：北京时间）和log_level
     3. 用Drain3进行日志模板挖掘
-    4. 按30s窗口聚合模板计数
+    4. 按30s窗口聚合模板计数、log level计数和总日志量
     """
     from drain3 import TemplateMiner
     from drain3.template_miner_config import TemplateMinerConfig
@@ -471,12 +471,17 @@ def deal_log(business_path, save_path):
         logger.info(f"Log covers {n_windows} unique 30s windows")
 
     # 构建聚合结果
+    log_levels = ['INFO', 'WARNING', 'ERROR', 'DEBUG', 'UNKNOWN']
     agg_records = []
     for (ts, svc), group in log_df.groupby(['timestamp_aligned', 'service']):
         template_counts = group['template_id'].value_counts().to_dict()
+        level_counts = group['log_level'].value_counts().to_dict()
         record = {'timestamp': int(ts), 'service': svc}
         for tid, cnt in template_counts.items():
             record[f'template_{tid}'] = cnt
+        for level in log_levels:
+            record[f'level_{level}'] = level_counts.get(level, 0)
+        record['log_total'] = len(group)
         agg_records.append(record)
 
     agg_df = pd.DataFrame(agg_records).fillna(0)
@@ -484,6 +489,10 @@ def deal_log(business_path, save_path):
     # 保存
     agg_df.to_csv(os.path.join(save_path, 'log.csv'), index=False)
     logger.info(f"Saved log.csv with {len(agg_df)} aggregated records")
+    logger.info(
+        "Log feature groups: "
+        f"templates={num_templates}, levels={len(log_levels)}, extras=1(total)"
+    )
 
     # 保存模板信息（使用 tab 分隔避免模板中含逗号的问题）
     template_file = os.path.join(save_path, 'log_templates.tsv')
@@ -555,10 +564,11 @@ def deal_trace(trace_path, save_path):
     logger.info(f"Trace covers {n_windows} unique 30s windows over {n_days:.1f} days")
     logger.info(f"Average records per window: {len(trace_df)/n_windows:.1f}")
 
-    # 构建服务调用关系矩阵
+    # 构建服务调用关系矩阵，并保留真实的跨服务边记录
     logger.info("Building service call relationships...")
 
     call_pairs = set()
+    edge_records = []
     for trace_id, group in tqdm(trace_df.groupby('trace_id'), desc='Building call graph'):
         span_map = {}
         for _, span in group.iterrows():
@@ -571,6 +581,13 @@ def deal_trace(trace_path, save_path):
                 parent_svc = span_map[parent]
                 if parent_svc != child_svc and parent_svc in GAIA_SERVICES and child_svc in GAIA_SERVICES:
                     call_pairs.add((parent_svc, child_svc))
+                    edge_records.append({
+                        'timestamp_aligned': int(span['timestamp_aligned']),
+                        'src_service': parent_svc,
+                        'dst_service': child_svc,
+                        'status_code': str(span['status_code']),
+                        'duration': float(span['duration']),
+                    })
 
     # 构建邻接矩阵
     relation_matrix = np.zeros((len(GAIA_SERVICES), len(GAIA_SERVICES)))
@@ -584,15 +601,26 @@ def deal_trace(trace_path, save_path):
     # 保存邻接矩阵
     pickle.dump(relation_matrix, open(os.path.join(save_path, 'trace_path.pkl'), 'wb'))
 
-    # 构建trace特征聚合
-    trace_agg = trace_df.groupby(['timestamp_aligned', 'service_name', 'status_code']).agg(
-        duration_sum=('duration', 'sum'),
-        duration_mean=('duration', 'mean'),
-        count=('duration', 'count'),
-    ).reset_index()
+    # 构建 trace 边特征聚合，保留 src->dst 方向信息
+    if edge_records:
+        trace_edge_df = pd.DataFrame(edge_records)
+        trace_agg = trace_edge_df.groupby(
+            ['timestamp_aligned', 'src_service', 'dst_service', 'status_code']
+        ).agg(
+            duration_sum=('duration', 'sum'),
+            duration_mean=('duration', 'mean'),
+            count=('duration', 'count'),
+        ).reset_index()
+    else:
+        trace_agg = pd.DataFrame(
+            columns=[
+                'timestamp_aligned', 'src_service', 'dst_service', 'status_code',
+                'duration_sum', 'duration_mean', 'count'
+            ]
+        )
 
     trace_agg.to_csv(os.path.join(save_path, 'trace.csv'), index=False)
-    logger.info(f"Saved trace.csv with {len(trace_agg)} aggregated records")
+    logger.info(f"Saved trace.csv with {len(trace_agg)} aggregated directed edge records")
 
     return trace_types, relation_matrix
 
@@ -632,9 +660,110 @@ def _parse_metric_filename(filename):
     }
 
 
+def _target_services_for_metric(info):
+    """
+    将原始metric映射到服务节点。
+    - 容器指标: 直接映射到对应服务节点
+    - system指标: 根据IP挂到同机服务节点，并显式加 host_ 前缀
+    """
+    service = info['service']
+    if service in GAIA_SERVICES:
+        return [(service, info['feature'])]
+
+    if service == 'system':
+        mapped_services = [svc for svc in GAIA_IP_MAP.get(info['ip'], []) if svc in GAIA_SERVICES]
+        return [(svc, f'host_{info["feature"]}') for svc in mapped_services]
+
+    return []
+
+
+def _metric_duplicate_reduce_mode(feature_name):
+    """根据metric语义选择重复时间戳的聚合方式。"""
+    feature = feature_name.lower()
+
+    sum_keywords = [
+        'network', 'bytes', 'packets', 'dropped', 'errors', 'fault',
+        'ops', 'operations', 'request', 'requests', 'sectors',
+        'switches', 'total_', '_total', 'count', 'connections',
+    ]
+    max_keywords = [
+        'max', 'peak', 'highest', 'watermark',
+    ]
+
+    if any(keyword in feature for keyword in max_keywords):
+        return 'max'
+    if any(keyword in feature for keyword in sum_keywords):
+        return 'sum'
+    return 'mean'
+
+
+def _reduce_duplicate_timestamp_values(values, reduce_mode):
+    """
+    聚合同一timestamp下的重复记录。
+    优先避免“一个非零值被多个零值稀释”的情况。
+    """
+    arr = pd.to_numeric(values, errors='coerce').to_numpy(dtype=float)
+    arr = arr[np.isfinite(arr)]
+    if arr.size == 0:
+        return np.nan
+
+    non_zero = arr[np.abs(arr) > 1e-12]
+    if non_zero.size == 1 and arr.size > 1:
+        return float(non_zero[0])
+
+    target = non_zero if non_zero.size > 0 else arr
+    if reduce_mode == 'sum':
+        return float(target.sum())
+    if reduce_mode == 'max':
+        return float(target.max())
+    return float(target.mean())
+
+
+def _metric_quality_stats(series, total_timestamps, interval_ms):
+    """计算单个metric特征的覆盖度、动态性和稳定性统计量。"""
+    values = pd.to_numeric(series.values, errors='coerce')
+    values = values[np.isfinite(values)]
+
+    if total_timestamps <= 0 or values.size == 0:
+        return {
+            'coverage': 0.0,
+            'unique_count': 0,
+            'non_zero_ratio': 0.0,
+            'dynamic_span': 0.0,
+            'dynamic_ratio': 0.0,
+            'score': 0.0,
+        }
+
+    aligned_index = ((series.index.values.astype(np.int64) // interval_ms) * interval_ms)
+    coverage = float(len(np.unique(aligned_index)) / total_timestamps)
+    unique_count = int(pd.Series(values).nunique(dropna=True))
+    non_zero_ratio = float((np.abs(values) > 1e-12).mean())
+
+    if values.size == 1:
+        q05 = q95 = float(values[0])
+    else:
+        q05, q95 = np.quantile(values, [0.05, 0.95])
+    dynamic_span = float(q95 - q05)
+    mean_abs = float(np.mean(np.abs(values)))
+    dynamic_ratio = float(dynamic_span / (mean_abs + 1e-6))
+
+    score = coverage * (0.5 + 0.5 * non_zero_ratio) * (
+        np.log1p(dynamic_span) + 0.1 * np.log1p(unique_count)
+    )
+
+    return {
+        'coverage': coverage,
+        'unique_count': unique_count,
+        'non_zero_ratio': non_zero_ratio,
+        'dynamic_span': dynamic_span,
+        'dynamic_ratio': dynamic_ratio,
+        'score': float(score),
+    }
+
+
 def _merge_metric_pair(args):
     """合并同一特征的两个时段文件"""
-    feature_name, file_pair, metric_dir = args
+    feature_name, file_pair, feature_alias = args
     dfs = []
     for filepath in file_pair:
         try:
@@ -648,14 +777,15 @@ def _merge_metric_pair(args):
         return feature_name, None
 
     merged = pd.concat(dfs, ignore_index=True)
-    merged = merged.drop_duplicates()
+    merged = merged.drop_duplicates(subset=['timestamp', 'value'])
+    merged['value'] = pd.to_numeric(merged['value'], errors='coerce')
+    merged = merged.dropna(subset=['timestamp', 'value'])
 
     if merged.duplicated(subset=['timestamp']).any():
-        non_zero = merged[merged['value'] != 0]
-        if len(non_zero) > 0:
-            merged = non_zero.groupby('timestamp', as_index=False).agg({'value': 'mean'})
-        else:
-            merged = merged.groupby('timestamp', as_index=False).agg({'value': 'mean'})
+        reduce_mode = _metric_duplicate_reduce_mode(feature_alias)
+        merged = merged.groupby('timestamp', as_index=False)['value'].agg(
+            lambda values: _reduce_duplicate_timestamp_values(values, reduce_mode)
+        )
 
     merged = merged.sort_values('timestamp').reset_index(drop=True)
     return feature_name, merged
@@ -664,10 +794,10 @@ def _merge_metric_pair(args):
 def deal_metric(metric_path, save_path):
     """
     处理指标数据：
-    1. 仅读取10个服务节点的docker指标
-    2. 合并两个时段文件
+    1. 读取10个服务节点的docker指标，并将system host指标挂接到对应服务
+    2. 合并两个时段文件，并按metric类型处理重复时间戳
     3. 多核CPU特征汇总
-    4. 统一各节点维度（取交集特征）
+    4. 先做质量筛选，再统一各节点维度（稳定共享特征交集）
     5. 方差过滤
     6. Min-Max归一化
     """
@@ -677,21 +807,31 @@ def deal_metric(metric_path, save_path):
     files = os.listdir(metric_path)
     feature_files = defaultdict(list)
     parsed_info = {}
+    raw_service_count = 0
+    host_service_links = 0
 
     for f in files:
         info = _parse_metric_filename(f)
         if info is None:
             continue
-        if info['service'] not in GAIA_SERVICES:
+        targets = _target_services_for_metric(info)
+        if not targets:
             continue
         full_name = info['full_name']
         feature_files[full_name].append(os.path.join(metric_path, f))
         parsed_info[full_name] = info
+        if info['service'] == 'system':
+            host_service_links += len(targets)
+        else:
+            raw_service_count += 1
 
-    logger.info(f"Found {len(feature_files)} unique features for service nodes")
+    logger.info(
+        f"Found {len(feature_files)} unique raw metric features "
+        f"({raw_service_count} service metrics, {host_service_links} host-to-service links)"
+    )
 
     # 并行合并时段文件
-    merge_args = [(name, files, metric_path) for name, files in feature_files.items()]
+    merge_args = [(name, files, parsed_info[name]['feature']) for name, files in feature_files.items()]
     n_workers = min(cpu_count(), 8)
     logger.info(f"Merging metric files with {n_workers} workers...")
     merged_features = {}
@@ -710,7 +850,7 @@ def deal_metric(metric_path, save_path):
     all_timestamps = np.unique(np.concatenate(ts_arrays))
     logger.info(f"Total unique timestamps: {len(all_timestamps)}")
 
-    # 多核CPU特征汇总
+    # 多核CPU特征汇总 + system指标挂接到服务节点
     logger.info("Aggregating multi-core features...")
     # service_features: {service: {base_feature_name: [full_names]}}
     # 其中 base_feature_name 去掉了 service_ip_ 前缀的部分用于跨服务对齐
@@ -721,23 +861,22 @@ def deal_metric(metric_path, save_path):
     for full_name, info in parsed_info.items():
         if full_name not in merged_features:
             continue
-        service = info['service']
         ip = info['ip']
-        feature = info['feature']
+        for service, feature in _target_services_for_metric(info):
+            is_multicore = False
+            for prefix in GAIA_MULTI_CORE_PREFIXES:
+                if prefix in feature:
+                    base = re.sub(r'core_\d+', 'core_X', feature)
+                    col_name = f'{service}_{ip}_{base}'
+                    service_features[service][col_name].append(full_name)
+                    service_col_map[service][base] = col_name
+                    is_multicore = True
+                    break
 
-        is_multicore = False
-        for prefix in GAIA_MULTI_CORE_PREFIXES:
-            if prefix in feature:
-                base = re.sub(r'core_\d+', 'core_X', feature)
-                col_name = f'{service}_{ip}_{base}'
+            if not is_multicore:
+                col_name = f'{service}_{ip}_{feature}'
                 service_features[service][col_name].append(full_name)
-                service_col_map[service][base] = col_name
-                is_multicore = True
-                break
-
-        if not is_multicore:
-            service_features[service][full_name].append(full_name)
-            service_col_map[service][feature] = full_name
+                service_col_map[service][feature] = col_name
 
     # 构建每个特征的 Series
     logger.info("Building feature Series...")
@@ -767,15 +906,56 @@ def deal_metric(metric_path, save_path):
     logger.info(f"After multi-core aggregation: {len(feature_series_dict)} features total")
 
     # ========== 统一各节点维度 ==========
-    # 提取每个服务的base_feature名称集合（去掉service_ip_前缀）
-    svc_base_features = {}
-    for svc in GAIA_SERVICES:
-        svc_base_features[svc] = set(service_col_map[svc].keys())
-        logger.info(f"  {svc}: {len(svc_base_features[svc])} features")
+    # 先做质量筛选，再对稳定共享特征取交集，避免直接做并集导致高稀疏和无信息特征混入
+    logger.info("Filtering low-quality metric features before alignment...")
+    interval_ms = GAIA_SAMPLE_INTERVAL * 1000
+    aligned_timestamps = np.unique((all_timestamps // interval_ms) * interval_ms)
 
-    # --- 方案A：交集（默认使用）---
+    min_feature_coverage = 0.20
+    min_dynamic_ratio = 1e-4
+    min_unique_values = 2
+    feature_quality = defaultdict(dict)
+    svc_base_features = {}
+    filtered_reason_counter = defaultdict(int)
+
+    for svc in GAIA_SERVICES:
+        kept_features = set()
+        for base_feat, col_name in service_col_map[svc].items():
+            if col_name not in feature_series_dict:
+                continue
+            stats = _metric_quality_stats(feature_series_dict[col_name], len(aligned_timestamps), interval_ms)
+            feature_quality[svc][base_feat] = stats
+
+            if stats['coverage'] < min_feature_coverage:
+                filtered_reason_counter['low_coverage'] += 1
+                continue
+            if stats['unique_count'] < min_unique_values:
+                filtered_reason_counter['constant'] += 1
+                continue
+            if stats['dynamic_span'] < 1e-10 or stats['dynamic_ratio'] < min_dynamic_ratio:
+                filtered_reason_counter['low_dynamic'] += 1
+                continue
+
+            kept_features.add(base_feat)
+
+        svc_base_features[svc] = kept_features
+        logger.info(f"  {svc}: kept {len(kept_features)} / {len(service_col_map[svc])} features after quality filtering")
+
+    if filtered_reason_counter:
+        logger.info(
+            "Filtered feature reasons: " +
+            ", ".join(f"{reason}={count}" for reason, count in sorted(filtered_reason_counter.items()))
+        )
+
+    if any(len(svc_base_features[svc]) == 0 for svc in GAIA_SERVICES):
+        logger.warning("Quality filtering removed all features for at least one service; falling back to unfiltered shared intersection")
+        svc_base_features = {
+            svc: set(service_col_map[svc].keys())
+            for svc in GAIA_SERVICES
+        }
+
     common_features = set.intersection(*svc_base_features.values())
-    logger.info(f"Common features across all services (intersection): {len(common_features)}")
+    logger.info(f"Stable shared features across all services (intersection): {len(common_features)}")
 
     # 按交集筛选，构建统一的特征列（每个服务使用相同顺序的特征）
     common_features_sorted = sorted(common_features)
@@ -789,28 +969,6 @@ def deal_metric(metric_path, save_path):
                 s = feature_series_dict[col_name].copy()
                 s.name = unified_col
                 unified_series[unified_col] = s
-
-    # # --- 方案B：并集（备选，缺失填-1）---
-    # # 取消以下注释可切换为并集模式
-    # all_features_union = set.union(*svc_base_features.values())
-    # logger.info(f"Union features across all services: {len(all_features_union)}")
-    # union_features_sorted = sorted(all_features_union)
-    # unified_series = {}
-    # for svc in GAIA_SERVICES:
-    #     for base_feat in union_features_sorted:
-    #         unified_col = f'{svc}_{base_feat}'
-    #         if base_feat in service_col_map[svc]:
-    #             col_name = service_col_map[svc][base_feat]
-    #             if col_name in feature_series_dict:
-    #                 s = feature_series_dict[col_name].copy()
-    #                 s.name = unified_col
-    #                 unified_series[unified_col] = s
-    #             else:
-    #                 # 该特征合并失败，用-1填充
-    #                 unified_series[unified_col] = pd.Series(-1, index=all_timestamps, name=unified_col)
-    #         else:
-    #             # 该服务缺失此特征，用-1填充
-    #             unified_series[unified_col] = pd.Series(-1, index=all_timestamps, name=unified_col)
 
     logger.info(f"Unified features: {len(unified_series)} ({len(common_features_sorted)} per node x {len(GAIA_SERVICES)} nodes)")
 
@@ -878,6 +1036,11 @@ def deal_metric(metric_path, save_path):
     metric_result = metric_result.reset_index()
     metric_result.to_csv(os.path.join(save_path, 'metric.csv'), index=False)
     logger.info(f"Saved metric.csv: shape={metric_result.shape}")
+
+    cache_file = os.path.join(save_path, 'metric_aggregated.pkl')
+    if os.path.exists(cache_file):
+        os.remove(cache_file)
+        logger.info(f"Removed stale metric cache: {cache_file}")
 
     return metric_result
 

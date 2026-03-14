@@ -109,3 +109,27 @@ f1   pr:1.0000  rc:0.1163  auc:0.8333 ap:0.7175 f1: 0.2083 pred_right: 16485 pre
  MSTGAD-b55737ce --weight_decay:0.0005   --learning_change:100 
 loss   pr:0.0000  rc:0.0000  auc:0.5104 ap:0.5621 f1: 0.0000 pred_right: 16500 pred_wrong: 0  actu_right: 16371 actu_wrong: 129
 f1   pr:1.0000  rc:0.1163  auc:0.8338 ap:0.7181 f1: 0.2083 pred_right: 16485 pred_wrong:15 actu_right: 16371 actu_wrong: 129
+
+ MSTGAD-67f8507c --weight_decay:0.0005   --learning_change:100 
+loss   pr:0.0000  rc:0.0000  auc:0.8683 ap:0.5958 f1: 0.0000 pred_right: 16500 pred_wrong: 0  actu_right: 16371 actu_wrong: 129
+f1   pr:1.0000  rc:0.1240  auc:0.8449 ap:0.7332 f1: 0.2207 pred_right: 16484 pred_wrong:16 actu_right: 16371 actu_wrong: 129
+
+ MSTGAD-69c38446 --weight_decay:0.0005   --learning_change:100 
+loss   pr:1.0000  rc:0.4400  auc:0.7999 ap:0.7583 f1: 0.6111 pred_right: 549 pred_wrong:11 actu_right: 535 actu_wrong: 25
+f1   pr:1.0000  rc:0.4400  auc:0.7999 ap:0.7583 f1: 0.6111 pred_right: 549 pred_wrong:11 actu_right: 535 actu_wrong: 25
+
+ MSTGAD-4f9302e7 --weight_decay:0.0005   --learning_change:100 
+loss   pr:0.0000  rc:0.0000  auc:0.5030 ap:0.4996 f1: 0.0000 pred_right: 16026 pred_wrong:474 actu_right: 16371 actu_wrong: 129
+f1   pr:0.0000  rc:0.0000  auc:0.5030 ap:0.4996 f1: 0.0000 pred_right: 16026 pred_wrong:474 actu_right: 16371 actu_wrong: 129
+
+ MSTGAD-69c38446 --weight_decay:0.0005   --learning_change:100 
+loss   pr:1.0000  rc:0.4400  auc:0.8941 ap:0.8293 f1: 0.6111 pred_right: 549 pred_wrong:11 actu_right: 535 actu_wrong: 25
+f1   pr:1.0000  rc:0.4400  auc:0.8941 ap:0.8293 f1: 0.6111 pred_right: 549 pred_wrong:11 actu_right: 535 actu_wrong: 25
+
+ MSTGAD-4f9302e7 --weight_decay:0.0005   --learning_change:100 
+loss   pr:0.0000  rc:0.0000  auc:0.5029 ap:0.4996 f1: 0.0000 pred_right: 16026 pred_wrong:474 actu_right: 16371 actu_wrong: 129
+f1   pr:0.0000  rc:0.0000  auc:0.5030 ap:0.4996 f1: 0.0000 pred_right: 16026 pred_wrong:474 actu_right: 16371 actu_wrong: 129
+
+ MSTGAD-69c38446 --weight_decay:0.0005   --learning_change:100 
+loss   pr:0.0000  rc:0.0000  auc:0.9150 ap:0.6989 f1: 0.0000 pred_right: 560 pred_wrong: 0  actu_right: 535 actu_wrong: 25
+f1   pr:0.0000  rc:0.0000  auc:0.9150 ap:0.6989 f1: 0.0000 pred_right: 560 pred_wrong: 0  actu_right: 535 actu_wrong: 25

@@ -197,9 +197,10 @@ class GatedCrossModalFusion(nn.Module):
 
 class ContrastiveLoss(nn.Module):
     """基于节点表示的多模态对比学习损失。"""
-    def __init__(self, node_dim, edge_dim, log_dim, proj_dim=32, temperature=0.1):
+    def __init__(self, node_dim, edge_dim, log_dim, proj_dim=32, temperature=0.1, summary_mode='last'):
         super(ContrastiveLoss, self).__init__()
         self.temperature = temperature
+        self.summary_mode = summary_mode
         
         self.proj_node = nn.Sequential(
             nn.Linear(node_dim, proj_dim),
@@ -224,14 +225,19 @@ class ContrastiveLoss(nn.Module):
         logits = torch.mm(z1, z2.t()) / self.temperature
         labels = torch.arange(B, device=z1.device)
         return F.cross_entropy(logits, labels)
+
+    def _summarize(self, x):
+        if self.summary_mode == 'mean':
+            return x.mean(dim=(1, 2))
+        return x[:, -1].mean(dim=1)
     
     def forward(self, enc_node, enc_edge, enc_log, dec_node, dec_edge, dec_log):
-        enc_n = self.proj_node(enc_node.mean(dim=(1,2)))
-        dec_n = self.proj_node(dec_node.mean(dim=(1,2)))
-        enc_e = self.proj_edge(enc_edge.mean(dim=(1,2)))
-        dec_e = self.proj_edge(dec_edge.mean(dim=(1,2)))
-        enc_l = self.proj_log(enc_log.mean(dim=(1,2)))
-        dec_l = self.proj_log(dec_log.mean(dim=(1,2)))
+        enc_n = self.proj_node(self._summarize(enc_node))
+        dec_n = self.proj_node(self._summarize(dec_node))
+        enc_e = self.proj_edge(self._summarize(enc_edge))
+        dec_e = self.proj_edge(self._summarize(dec_edge))
+        enc_l = self.proj_log(self._summarize(enc_log))
+        dec_l = self.proj_log(self._summarize(dec_log))
         
         loss_node = self.info_nce_loss(enc_n, dec_n)
         loss_edge = self.info_nce_loss(enc_e, dec_e)
