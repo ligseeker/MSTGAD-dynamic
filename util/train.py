@@ -43,6 +43,7 @@ class Base(nn.Module):
         self.rec_down = args['rec_down']
         self.para_low = args['para_low']
         self.True_list = {'normal': 1, 'abnormal': args['abnormal_weight']}
+        self._loaded_eval_threshold = None
 
         if args['evaluate']:
             self.load_model(args['model_path'])
@@ -85,7 +86,27 @@ class Base(nn.Module):
             logging.info(f'{self.model.name} on {model_save_file} loading...')
             ckpt_path = os.path.join(model_save_file, f"{self.model.name}_{name}_stage.ckpt")
             if os.path.exists(ckpt_path):
-                self.model.load_state_dict(torch.load(ckpt_path, map_location=self.device))
+                checkpoint = torch.load(ckpt_path, map_location=self.device)
+                if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+                    state_dict = checkpoint['model_state_dict']
+                    meta = checkpoint.get('meta', {})
+                else:
+                    state_dict = checkpoint
+                    meta = {}
+                self.model.load_state_dict(state_dict)
+
+                threshold = meta.get('threshold', None)
+                if threshold is not None:
+                    try:
+                        threshold = float(threshold)
+                        self._loaded_eval_threshold = threshold
+                        if hasattr(self, 'eval_threshold'):
+                            self.eval_threshold = threshold
+                        if hasattr(self, '_threshold_initialized'):
+                            self._threshold_initialized = True
+                        logging.info(f'loaded threshold from {name} ckpt: {threshold:.4f}')
+                    except (TypeError, ValueError):
+                        pass
             else:
                 logging.info(f"{ckpt_path} not found, skipping load.")
 
@@ -96,8 +117,26 @@ class Base(nn.Module):
         if best_dict['state'] is None:
             logging.info(f'No {self.model.name} - {name} statue file')
         else: 
-            logging.info(f'{self.model.name} - {name}  best score:{best_dict["score"]} at epoch {best_dict["epoch"]}')
-            torch.save(best_dict['state'], file_status)
+            threshold = best_dict.get('threshold', None)
+            if threshold is None:
+                logging.info(
+                    f'{self.model.name} - {name}  best score:{best_dict["score"]} at epoch {best_dict["epoch"]}'
+                )
+            else:
+                logging.info(
+                    f'{self.model.name} - {name}  best score:{best_dict["score"]} '
+                    f'at epoch {best_dict["epoch"]} threshold:{threshold:.4f}'
+                )
+            payload = {
+                'model_state_dict': best_dict['state'],
+                'meta': {
+                    'score': float(best_dict.get('score', 0.0)),
+                    'epoch': int(best_dict.get('epoch', 0)),
+                    'threshold': threshold,
+                    'name': name,
+                }
+            }
+            torch.save(payload, file_status)
 
 class MY(Base):
     def __init__(self, model, **args):
@@ -110,8 +149,8 @@ class MY(Base):
         self.graph_summary_mode = args.get('graph_summary_mode', 'last')
         self.contrast_summary_mode = args.get('contrast_summary_mode', 'last')
         self.score_fusion_alpha = float(args.get('score_fusion_alpha', 1.0))
-        self.eval_threshold = 0.5
-        self._threshold_initialized = False
+        self.eval_threshold = float(self._loaded_eval_threshold) if self._loaded_eval_threshold is not None else 0.5
+        self._threshold_initialized = self._loaded_eval_threshold is not None
 
     def _contrast_gamma(self, epoch):
         if self.contrast_weight <= 0 or epoch < self.contrast_start_epoch:
@@ -131,8 +170,8 @@ class MY(Base):
             min_lr=1e-5,
         )
 
-        best = {"loss":{"score": float("inf"), "state": None, "epoch": 0},
-                "f1":{"score": float("-inf"), "state": None, "epoch": 0}}
+        best = {"loss":{"score": float("inf"), "state": None, "epoch": 0, "threshold": None},
+                "f1":{"score": float("-inf"), "state": None, "epoch": 0, "threshold": None}}
         monitor_best = float("-inf")
         monitor_bad_count = 0
         monitor_best_epoch = -1
@@ -243,6 +282,7 @@ class MY(Base):
                 best["loss"]["score"] = epoch_loss
                 best["loss"]["state"] = copy.deepcopy(self.model.state_dict())
                 best["loss"]["epoch"] = epoch
+                best["loss"]["threshold"] = float(self.eval_threshold)
             logging.info(
                 "Epoch {}/{}, all:{:.5f} cls:{:.5f} rec:{:.5f} ctr:{:.5f} greg:{:.5f} [{:.2f}s]; "
                 "best_loss:{:.5f} monitor_pat:{}"
@@ -314,6 +354,7 @@ class MY(Base):
                     best["f1"]["score"] = monitor_score
                     best["f1"]["state"] = copy.deepcopy(self.model.state_dict())
                     best["f1"]["epoch"] = epoch
+                    best["f1"]["threshold"] = float(calibrated_threshold)
 
                 prev_lr = optimizer.param_groups[0]['lr']
                 scheduler.step(monitor_score)
@@ -358,10 +399,12 @@ class MY(Base):
             best['loss']['state'] = copy.deepcopy(self.model.state_dict())
             best['loss']['score'] = float("inf")
             best['loss']['epoch'] = self.epoches - 1
+            best['loss']['threshold'] = float(self.eval_threshold)
         if best['f1']['state'] is None:
             best['f1']['state'] = copy.deepcopy(self.model.state_dict())
             best['f1']['score'] = monitor_best if monitor_best > float("-inf") else 0.0
             best['f1']['epoch'] = monitor_best_epoch if monitor_best_epoch >= 0 else self.epoches - 1
+            best['f1']['threshold'] = float(self.eval_threshold)
         logging.info(f'final calibrated threshold: {self.eval_threshold:.4f}')
         self.save_model(best['loss'], self.model_save_dir, name='loss')
         self.save_model(best['f1'], self.model_save_dir, name='f1')
