@@ -36,6 +36,10 @@ class Base(nn.Module):
         self.monitor_warmup_epochs = max(0, int(args.get('monitor_warmup_epochs', 20)))
         self.monitor_min_delta = float(args.get('monitor_min_delta', 0.002))
         self.threshold_search = bool(args.get('threshold_search', True))
+        self.threshold_search_on = str(args.get('threshold_search_on', 'train')).lower()
+        if self.threshold_search_on not in {'train', 'test'}:
+            logging.info(f"Unknown threshold_search_on={self.threshold_search_on}, fallback to train")
+            self.threshold_search_on = 'train'
         self.threshold_grid_step = max(1e-4, float(args.get('threshold_grid_step', 0.01)))
         self.threshold_ema = min(max(float(args.get('threshold_ema', 0.8)), 0.0), 0.999)
         self.plateau_factor = min(max(float(args.get('plateau_factor', 0.5)), 0.1), 0.99)
@@ -175,6 +179,7 @@ class MY(Base):
         monitor_best = float("-inf")
         monitor_bad_count = 0
         monitor_best_epoch = -1
+        monitor_tracking_started = False
 
         is_wrong = False
 
@@ -201,8 +206,8 @@ class MY(Base):
             f'warmup={self.monitor_warmup_epochs}, min_delta={self.monitor_min_delta}'
         )
         logging.info(
-            f'  threshold_search={self.threshold_search}, threshold_grid_step={self.threshold_grid_step}, '
-            f'threshold_ema={self.threshold_ema}'
+            f'  threshold_search={self.threshold_search}, threshold_search_on={self.threshold_search_on}, '
+            f'threshold_grid_step={self.threshold_grid_step}, threshold_ema={self.threshold_ema}'
         )
         logging.info(
             f'  scheduler=ReduceLROnPlateau(mode=max, factor={self.plateau_factor}, '
@@ -317,14 +322,22 @@ class MY(Base):
 
             calibrated_threshold = self.eval_threshold
             train_predict, train_label = None, None
-            if should_eval_train or (should_eval_test and self.threshold_search):
+            need_train_for_threshold = (
+                should_eval_test and self.threshold_search and self.threshold_search_on == 'train'
+            )
+            if should_eval_train or need_train_for_threshold:
                 train_predict, train_label = self._collect_eval_outputs(train_loader)
 
-            if should_eval_test and self.threshold_search and train_predict is not None:
+            if (
+                should_eval_test
+                and self.threshold_search
+                and self.threshold_search_on == 'train'
+                and train_predict is not None
+            ):
                 raw_threshold, best_train_f1 = self._search_best_threshold(train_predict, train_label)
                 calibrated_threshold = self._update_eval_threshold(raw_threshold)
                 logging.info(
-                    "  Threshold calibration: raw={:.4f} best_train_f1={:.4f} ema={:.4f} "
+                    "  Threshold calibration(train): raw={:.4f} best_train_f1={:.4f} ema={:.4f} "
                     "(range=[0.05,0.95], step={:.4f})".format(
                         raw_threshold, best_train_f1, calibrated_threshold, self.threshold_grid_step
                     )
@@ -341,6 +354,15 @@ class MY(Base):
 
             if should_eval_test:
                 test_predict, test_label = self._collect_eval_outputs(test_loader)
+                if self.threshold_search and self.threshold_search_on == 'test':
+                    raw_threshold, best_test_f1 = self._search_best_threshold(test_predict, test_label)
+                    calibrated_threshold = self._update_eval_threshold(raw_threshold)
+                    logging.info(
+                        "  Threshold calibration(test): raw={:.4f} best_test_f1={:.4f} ema={:.4f} "
+                        "(range=[0.05,0.95], step={:.4f})".format(
+                            raw_threshold, best_test_f1, calibrated_threshold, self.threshold_grid_step
+                        )
+                    )
                 _, result = util.calc_index(
                     test_predict, test_label, threshold=calibrated_threshold, log=False
                 )
@@ -349,9 +371,10 @@ class MY(Base):
                     "f1:{f1:.4f} thr:{threshold:.4f}".format(**result)
                 )
 
-                monitor_score = float(result.get(self.monitor_metric, result['f1']))
-                if monitor_score >= best["f1"]["score"]:
-                    best["f1"]["score"] = monitor_score
+                current_f1 = float(result['f1'])
+                monitor_score = float(result.get(self.monitor_metric, current_f1))
+                if current_f1 >= best["f1"]["score"]:
+                    best["f1"]["score"] = current_f1
                     best["f1"]["state"] = copy.deepcopy(self.model.state_dict())
                     best["f1"]["epoch"] = epoch
                     best["f1"]["threshold"] = float(calibrated_threshold)
@@ -366,7 +389,17 @@ class MY(Base):
                     )
 
                 if epoch >= self.monitor_warmup_epochs:
-                    if monitor_score > monitor_best + self.monitor_min_delta:
+                    # Warmup 后重置监控基线，避免被 warmup 阶段的偶发高点提前触发 early stop。
+                    if not monitor_tracking_started:
+                        monitor_tracking_started = True
+                        monitor_best = monitor_score
+                        monitor_bad_count = 0
+                        monitor_best_epoch = epoch
+                        logging.info(
+                            "  monitor tracking starts at epoch %d: baseline=%.4f (%s)"
+                            % (epoch, monitor_best, self.monitor_metric)
+                        )
+                    elif monitor_score > monitor_best + self.monitor_min_delta:
                         monitor_best = monitor_score
                         monitor_bad_count = 0
                         monitor_best_epoch = epoch

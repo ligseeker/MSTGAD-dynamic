@@ -33,6 +33,9 @@ parser.add_argument("--monitor_min_delta", default=0.002, type=float,
                     help='minimum monitor metric improvement to reset patience')
 parser.add_argument("--threshold_search", default=True, type=lambda x: x.lower() == "true",
                     help='search best threshold on train split before each test evaluation')
+parser.add_argument("--threshold_search_on", default='train', type=str,
+                    choices=['train', 'test'],
+                    help='which split to use for threshold search')
 parser.add_argument("--threshold_grid_step", default=0.01, type=float,
                     help='threshold search step in [0.05, 0.95]')
 parser.add_argument("--threshold_ema", default=0.8, type=float,
