@@ -503,19 +503,36 @@ def deal_log(business_path, save_path):
 
     # 构建聚合结果
     log_levels = ['INFO', 'WARNING', 'ERROR', 'DEBUG', 'UNKNOWN']
-    agg_records = []
-    for (ts, svc), group in log_df.groupby(['timestamp_aligned', 'service']):
-        template_counts = group['template_id'].value_counts().to_dict()
-        level_counts = group['log_level'].value_counts().to_dict()
-        record = {'timestamp': int(ts), 'service': svc}
-        for tid, cnt in template_counts.items():
-            record[f'template_{tid}'] = cnt
-        for level in log_levels:
-            record[f'level_{level}'] = level_counts.get(level, 0)
-        record['log_total'] = len(group)
-        agg_records.append(record)
+    logger.info("Aggregating templates and levels...")
+    group_keys = ['timestamp_aligned', 'service']
 
-    agg_df = pd.DataFrame(agg_records).fillna(0)
+    template_counts = (
+        log_df.groupby(group_keys + ['template_id'])
+        .size()
+        .unstack(fill_value=0)
+    )
+    template_counts.columns = [f'template_{c}' for c in template_counts.columns]
+
+    level_counts = (
+        log_df.groupby(group_keys + ['log_level'])
+        .size()
+        .unstack(fill_value=0)
+    )
+    level_counts.columns = [f'level_{c}' for c in level_counts.columns]
+
+    # Ensure all expected level columns exist for downstream loading.
+    expected_level_cols = [f'level_{level}' for level in log_levels]
+    level_counts = level_counts.reindex(columns=expected_level_cols, fill_value=0)
+
+    total_counts = log_df.groupby(group_keys).size().to_frame('log_total')
+
+    agg_df = pd.concat([template_counts, level_counts, total_counts], axis=1).reset_index()
+    agg_df = agg_df.rename(columns={'timestamp_aligned': 'timestamp'})
+    agg_df['timestamp'] = agg_df['timestamp'].astype(np.int64)
+
+    count_cols = [c for c in agg_df.columns if c not in ['timestamp', 'service']]
+    agg_df[count_cols] = agg_df[count_cols].fillna(0).astype(np.int64)
+    agg_df = agg_df.sort_values(['timestamp', 'service']).reset_index(drop=True)
 
     # 保存
     agg_df.to_csv(os.path.join(save_path, 'log.csv'), index=False)
