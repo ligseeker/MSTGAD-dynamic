@@ -10,34 +10,66 @@ import torch
 from sklearn.metrics import *
 
 
-def calc_index(predict, actual):
+def calc_index(predict, actual, threshold=0.5, log=True):
     """
     calculate f1 score by predict and actual.
     """
+    if not isinstance(predict, torch.Tensor):
+        predict = torch.as_tensor(predict)
+    if not isinstance(actual, torch.Tensor):
+        actual = torch.as_tensor(actual)
+
+    predict = predict.detach().cpu()
+    actual = actual.detach().cpu()
+
     if predict.dim() != 2:
         predict = predict.reshape(-1, predict.shape[-1])
     if actual.dim() != 2:
         actual = actual.reshape(-1, actual.shape[-1])
 
-    ap = average_precision_score(actual, predict, average='macro').tolist()
-    auc = roc_auc_score(actual, predict, average='macro').tolist()
+    actual_np = actual.numpy()
+    predict_np = predict.numpy()
+    try:
+        ap = float(average_precision_score(actual_np, predict_np, average='macro'))
+    except ValueError:
+        ap = 0.0
+    try:
+        auc = float(roc_auc_score(actual_np, predict_np, average='macro'))
+    except ValueError:
+        auc = 0.0
 
     if predict.shape[-1] == 2 and actual.shape[-1] == 2:
-        actual, predict = torch.argmax(actual, dim=-1), torch.argmax(predict, dim=-1)
+        actual = torch.argmax(actual, dim=-1).numpy()
+        if threshold is None:
+            predict = torch.argmax(predict, dim=-1).numpy()
+        else:
+            anomaly_prob = predict[:, 1].numpy()
+            predict = (anomaly_prob > float(threshold)).astype(np.int64)
+    else:
+        if actual.dim() == 2:
+            actual = torch.argmax(actual, dim=-1).numpy()
+        else:
+            actual = actual.reshape(-1).numpy()
+        if predict.dim() == 2:
+            predict = torch.argmax(predict, dim=-1).numpy()
+        else:
+            predict = predict.reshape(-1).numpy()
 
-    ps = precision_score(actual, predict, average="binary").tolist()
-    rs = recall_score(actual, predict, average="binary").tolist()
-    effection = f1_score(actual, predict, average="binary", zero_division=1).tolist()
+    ps = float(precision_score(actual, predict, average="binary", zero_division=1))
+    rs = float(recall_score(actual, predict, average="binary", zero_division=1))
+    effection = float(f1_score(actual, predict, average="binary", zero_division=1))
 
-    pred = np.bincount(predict)
-    actu = np.bincount(actual)
+    pred = np.bincount(predict.astype(np.int64), minlength=2)
+    actu = np.bincount(actual.astype(np.int64), minlength=2)
+    threshold_info = "argmax" if threshold is None else f"{float(threshold):.4f}"
 
     if pred.shape[0] == 1:
-        information = f'pr:{ps:.4f}  rc:{rs:.4f}  auc:{auc:.4f} ap:{ap:.4f} f1: {effection:.4f} pred_right: {pred[0]} pred_wrong: 0  actu_right: {actu[0]} actu_wrong: {actu[1]}'
+        information = f'pr:{ps:.4f}  rc:{rs:.4f}  auc:{auc:.4f} ap:{ap:.4f} f1: {effection:.4f} pred_right: {pred[0]} pred_wrong: 0  actu_right: {actu[0]} actu_wrong: {actu[1]} thr:{threshold_info}'
     else:
-        information = f'pr:{ps:.4f}  rc:{rs:.4f}  auc:{auc:.4f} ap:{ap:.4f} f1: {effection:.4f} pred_right: {pred[0]} pred_wrong:{pred[1]} actu_right: {actu[0]} actu_wrong: {actu[1]}'
-    logging.info(information)
-    return information, {'pr':ps, 'rc':rs, 'auc':auc, 'ap':ap, 'f1':effection}
+        information = f'pr:{ps:.4f}  rc:{rs:.4f}  auc:{auc:.4f} ap:{ap:.4f} f1: {effection:.4f} pred_right: {pred[0]} pred_wrong:{pred[1]} actu_right: {actu[0]} actu_wrong: {actu[1]} thr:{threshold_info}'
+    if log:
+        logging.info(information)
+    return information, {'pr': ps, 'rc': rs, 'auc': auc, 'ap': ap, 'f1': effection, 'threshold': threshold}
 
 
 def json_pretty_dump(obj, filename):

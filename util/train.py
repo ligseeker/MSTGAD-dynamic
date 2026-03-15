@@ -6,6 +6,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from adabelief_pytorch import AdaBelief
+from sklearn.metrics import f1_score
 
 from tqdm import tqdm
 import util.util as util
@@ -25,8 +26,20 @@ class Base(nn.Module):
         self.model_save_dir = args['result_dir']
         self.learning_change = args['learning_change']
         self.learning_gamma = args['learning_gamma']
-        self.eval_interval = args.get('eval_interval', 5)
+        self.eval_interval = max(1, int(args.get('eval_interval', 5)))
         self.train_eval_interval = max(0, int(args.get('train_eval_interval', 1)))
+        self.monitor_metric = str(args.get('monitor_metric', 'f1')).lower()
+        if self.monitor_metric not in {'f1', 'auc', 'ap', 'pr', 'rc'}:
+            logging.info(f"Unknown monitor_metric={self.monitor_metric}, fallback to f1")
+            self.monitor_metric = 'f1'
+        self.monitor_patience = max(1, int(args.get('monitor_patience', 6)))
+        self.monitor_warmup_epochs = max(0, int(args.get('monitor_warmup_epochs', 20)))
+        self.monitor_min_delta = float(args.get('monitor_min_delta', 0.002))
+        self.threshold_search = bool(args.get('threshold_search', True))
+        self.threshold_grid_step = max(1e-4, float(args.get('threshold_grid_step', 0.01)))
+        self.threshold_ema = min(max(float(args.get('threshold_ema', 0.8)), 0.0), 0.999)
+        self.plateau_factor = min(max(float(args.get('plateau_factor', 0.5)), 0.1), 0.99)
+        self.plateau_patience = max(1, int(args.get('plateau_patience', 4)))
         self.rec_down = args['rec_down']
         self.para_low = args['para_low']
         self.True_list = {'normal': 1, 'abnormal': args['abnormal_weight']}
@@ -97,6 +110,8 @@ class MY(Base):
         self.graph_summary_mode = args.get('graph_summary_mode', 'last')
         self.contrast_summary_mode = args.get('contrast_summary_mode', 'last')
         self.score_fusion_alpha = float(args.get('score_fusion_alpha', 1.0))
+        self.eval_threshold = 0.5
+        self._threshold_initialized = False
 
     def _contrast_gamma(self, epoch):
         if self.contrast_weight <= 0 or epoch < self.contrast_start_epoch:
@@ -108,12 +123,21 @@ class MY(Base):
 
     def fit(self, train_loader, test_loader, **args):
         optimizer = AdaBelief(self.model.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, self.learning_change, self.learning_gamma)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode='max',
+            factor=self.plateau_factor,
+            patience=self.plateau_patience,
+            min_lr=1e-5,
+        )
 
         best = {"loss":{"score": float("inf"), "state": None, "epoch": 0},
-                "f1":{"score": 0, "state": None, "epoch": 0}}
+                "f1":{"score": float("-inf"), "state": None, "epoch": 0}}
+        monitor_best = float("-inf")
+        monitor_bad_count = 0
+        monitor_best_epoch = -1
 
-        pre_loss, worse_count, isWrong = float("inf"), 0, False
+        is_wrong = False
 
         label_weight = torch.tensor(
             np.array(list(self.True_list.values())), dtype=torch.float, device=self.device)
@@ -132,6 +156,18 @@ class MY(Base):
         )
         logging.info(
             f'  eval_interval={self.eval_interval}, train_eval_interval={self.train_eval_interval}, precision=float32'
+        )
+        logging.info(
+            f'  monitor={self.monitor_metric}, monitor_patience={self.monitor_patience}, '
+            f'warmup={self.monitor_warmup_epochs}, min_delta={self.monitor_min_delta}'
+        )
+        logging.info(
+            f'  threshold_search={self.threshold_search}, threshold_grid_step={self.threshold_grid_step}, '
+            f'threshold_ema={self.threshold_ema}'
+        )
+        logging.info(
+            f'  scheduler=ReduceLROnPlateau(mode=max, factor={self.plateau_factor}, '
+            f'patience={self.plateau_patience}, min_lr=1e-5)'
         )
         global_step = 0
 
@@ -173,7 +209,7 @@ class MY(Base):
                     loss = (1 - para) * cls_loss + para * rec_loss + gamma * contrast_loss + graph_reg_loss
 
                     if not torch.isfinite(loss):
-                        isWrong = True
+                        is_wrong = True
                         logging.info("loss is not finite")
                         break
 
@@ -199,29 +235,20 @@ class MY(Base):
             epoch_contrast_loss = torch.mean(torch.tensor(epoch_contrast_loss)).item() if epoch_contrast_loss else 0.0
             epoch_graph_reg_loss = torch.mean(torch.tensor(epoch_graph_reg_loss)).item() if epoch_graph_reg_loss else 0.0
 
-            if isWrong:
+            if is_wrong:
                 logging.info("calculate error in epoch {}".format(epoch))
                 break
 
             if epoch_loss <= best["loss"]["score"] or epoch == self.rec_down:
-                worse_count = 0
                 best["loss"]["score"] = epoch_loss
                 best["loss"]["state"] = copy.deepcopy(self.model.state_dict())
                 best["loss"]["epoch"] = epoch
-            elif epoch_loss <= pre_loss:
-                pass
-            elif epoch_loss > pre_loss:
-                worse_count += 1
-                if self.patience > 0 and worse_count >= self.patience:
-                    logging.info("Early stop at epoch: {}".format(epoch))
-                    break
-
-            pre_loss = epoch_loss
             logging.info(
-                "Epoch {}/{}, all:{:.5f} cls:{:.5f} rec:{:.5f} ctr:{:.5f} greg:{:.5f} [{:.2f}s]; best:{:.5f} pat:{}"
+                "Epoch {}/{}, all:{:.5f} cls:{:.5f} rec:{:.5f} ctr:{:.5f} greg:{:.5f} [{:.2f}s]; "
+                "best_loss:{:.5f} monitor_pat:{}"
                 .format(epoch, self.epoches, epoch_loss, epoch_cls_loss, epoch_rec_loss,
                         epoch_contrast_loss, epoch_graph_reg_loss,
-                        epoch_time_elapsed, best["loss"]['score'], worse_count))
+                        epoch_time_elapsed, best["loss"]['score'], monitor_bad_count))
             
             try:
                 graph_lambda = torch.sigmoid(self.model.dynamic_graph_learner.graph_lambda).item()
@@ -241,44 +268,111 @@ class MY(Base):
             except Exception:
                 pass
 
-            if self.train_eval_interval > 0 and (
+            should_eval_train = self.train_eval_interval > 0 and (
                 (epoch + 1) % self.train_eval_interval == 0 or epoch == self.epoches - 1
-            ):
-                if hasattr(self.model, 'reset_dynamic_graph_cache'):
-                    self.model.reset_dynamic_graph_cache()
-                train_result = self.evaluate(train_loader)
+            )
+            should_eval_test = epoch > self.rec_down and (
+                (epoch + 1) % self.eval_interval == 0 or epoch == self.epoches - 1
+            )
+
+            calibrated_threshold = self.eval_threshold
+            train_predict, train_label = None, None
+            if should_eval_train or (should_eval_test and self.threshold_search):
+                train_predict, train_label = self._collect_eval_outputs(train_loader)
+
+            if should_eval_test and self.threshold_search and train_predict is not None:
+                raw_threshold, best_train_f1 = self._search_best_threshold(train_predict, train_label)
+                calibrated_threshold = self._update_eval_threshold(raw_threshold)
                 logging.info(
-                    "[train] pr:{pr:.4f}  rc:{rc:.4f}  auc:{auc:.4f} ap:{ap:.4f} f1:{f1:.4f}".format(
-                        **train_result
+                    "  Threshold calibration: raw={:.4f} best_train_f1={:.4f} ema={:.4f} "
+                    "(range=[0.05,0.95], step={:.4f})".format(
+                        raw_threshold, best_train_f1, calibrated_threshold, self.threshold_grid_step
                     )
                 )
 
-            if epoch > self.rec_down and ((epoch + 1) % self.eval_interval == 0 or epoch == self.epoches - 1):
-                if hasattr(self.model, 'reset_dynamic_graph_cache'):
-                    self.model.reset_dynamic_graph_cache()
-                result = self.evaluate(test_loader)
-                logging.info(
-                    "[test] pr:{pr:.4f}  rc:{rc:.4f}  auc:{auc:.4f} ap:{ap:.4f} f1:{f1:.4f}".format(
-                        **result
-                    )
+            if should_eval_train and train_predict is not None:
+                _, train_result = util.calc_index(
+                    train_predict, train_label, threshold=calibrated_threshold, log=False
                 )
-                if float(result['f1']) >= best["f1"]["score"]:
-                    best["f1"]["score"] = float(result['f1'])
+                logging.info(
+                    "[train] pr:{pr:.4f}  rc:{rc:.4f}  auc:{auc:.4f} ap:{ap:.4f} "
+                    "f1:{f1:.4f} thr:{threshold:.4f}".format(**train_result)
+                )
+
+            if should_eval_test:
+                test_predict, test_label = self._collect_eval_outputs(test_loader)
+                _, result = util.calc_index(
+                    test_predict, test_label, threshold=calibrated_threshold, log=False
+                )
+                logging.info(
+                    "[test] pr:{pr:.4f}  rc:{rc:.4f}  auc:{auc:.4f} ap:{ap:.4f} "
+                    "f1:{f1:.4f} thr:{threshold:.4f}".format(**result)
+                )
+
+                monitor_score = float(result.get(self.monitor_metric, result['f1']))
+                if monitor_score >= best["f1"]["score"]:
+                    best["f1"]["score"] = monitor_score
                     best["f1"]["state"] = copy.deepcopy(self.model.state_dict())
                     best["f1"]["epoch"] = epoch
-            scheduler.step()
+
+                prev_lr = optimizer.param_groups[0]['lr']
+                scheduler.step(monitor_score)
+                new_lr = optimizer.param_groups[0]['lr']
+                if new_lr < prev_lr:
+                    logging.info(
+                        "  LR reduced by plateau scheduler: %.8f -> %.8f (monitor %.4f)"
+                        % (prev_lr, new_lr, monitor_score)
+                    )
+
+                if epoch >= self.monitor_warmup_epochs:
+                    if monitor_score > monitor_best + self.monitor_min_delta:
+                        monitor_best = monitor_score
+                        monitor_bad_count = 0
+                        monitor_best_epoch = epoch
+                    else:
+                        monitor_bad_count += 1
+                        logging.info(
+                            "  monitor plateau: current=%.4f best=%.4f at epoch %d "
+                            "(bad_count=%d/%d, min_delta=%.4f)"
+                            % (
+                                monitor_score,
+                                monitor_best,
+                                monitor_best_epoch,
+                                monitor_bad_count,
+                                self.monitor_patience,
+                                self.monitor_min_delta,
+                            )
+                        )
+                        if monitor_bad_count >= self.monitor_patience:
+                            logging.info(
+                                "Early stop at epoch %d by monitor(%s): no improvement for %d eval rounds"
+                                % (epoch, self.monitor_metric, self.monitor_patience)
+                            )
+                            break
+                elif monitor_score > monitor_best:
+                    monitor_best = monitor_score
+                    monitor_best_epoch = epoch
 
         logging.info('saving model...')
+        if best['loss']['state'] is None:
+            best['loss']['state'] = copy.deepcopy(self.model.state_dict())
+            best['loss']['score'] = float("inf")
+            best['loss']['epoch'] = self.epoches - 1
+        if best['f1']['state'] is None:
+            best['f1']['state'] = copy.deepcopy(self.model.state_dict())
+            best['f1']['score'] = monitor_best if monitor_best > float("-inf") else 0.0
+            best['f1']['epoch'] = monitor_best_epoch if monitor_best_epoch >= 0 else self.epoches - 1
+        logging.info(f'final calibrated threshold: {self.eval_threshold:.4f}')
         self.save_model(best['loss'], self.model_save_dir, name='loss')
         self.save_model(best['f1'], self.model_save_dir, name='f1')
 
-    def evaluate(self, test_loader, isFinall=False):
+    def _collect_eval_outputs(self, data_loader):
         self.model.eval()
         if hasattr(self.model, 'reset_dynamic_graph_cache'):
             self.model.reset_dynamic_graph_cache(reset_stats=True)
         with torch.no_grad():
             predict_list, label_list, rec_score_list = [], [], []
-            for batch_input in tqdm(test_loader):
+            for batch_input in tqdm(data_loader):
                     batch_input = self.input2device(batch_input,self.use_gpu)
                     if self.score_fusion_alpha < 1.0:
                         raw_result, _, rec_score = self.model(
@@ -296,13 +390,48 @@ class MY(Base):
             if self.score_fusion_alpha < 1.0 and rec_score_list:
                 rec_score_list = torch.concat(rec_score_list, dim=0).reshape(-1).cpu()
                 predict_list = self._fuse_predict_with_reconstruction(predict_list, rec_score_list)
+            return predict_list, label_list
 
-            info, result = util.calc_index(predict_list, label_list)
+    def _search_best_threshold(self, predict_list, label_list):
+        if predict_list.shape[-1] != 2 or label_list.shape[-1] != 2:
+            return self.eval_threshold, 0.0
+        y_true = torch.argmax(label_list.reshape(-1, label_list.shape[-1]), dim=-1).numpy()
+        y_prob = predict_list.reshape(-1, predict_list.shape[-1])[:, 1].numpy()
 
-            if isFinall:
-                return info
-            else:
-                return result
+        low, high = 0.05, 0.95
+        thresholds = np.arange(low, high + 1e-8, self.threshold_grid_step)
+        if thresholds.size == 0:
+            return self.eval_threshold, 0.0
+
+        best_threshold = float(self.eval_threshold)
+        best_f1 = float("-inf")
+        for threshold in thresholds:
+            y_pred = (y_prob > threshold).astype(np.int64)
+            score = float(f1_score(y_true, y_pred, average="binary", zero_division=1))
+            if score > best_f1 + 1e-12 or (abs(score - best_f1) <= 1e-12 and abs(threshold - 0.5) < abs(best_threshold - 0.5)):
+                best_f1 = score
+                best_threshold = float(threshold)
+        return best_threshold, best_f1
+
+    def _update_eval_threshold(self, raw_threshold):
+        clipped = float(np.clip(raw_threshold, 0.05, 0.95))
+        if self._threshold_initialized:
+            updated = self.threshold_ema * self.eval_threshold + (1 - self.threshold_ema) * clipped
+        else:
+            updated = clipped
+            self._threshold_initialized = True
+        self.eval_threshold = float(np.clip(updated, 0.05, 0.95))
+        return self.eval_threshold
+
+    def evaluate(self, test_loader, isFinall=False, threshold=None):
+        predict_list, label_list = self._collect_eval_outputs(test_loader)
+        eval_threshold = self.eval_threshold if threshold is None else float(threshold)
+        info, result = util.calc_index(predict_list, label_list, threshold=eval_threshold)
+
+        if isFinall:
+            return info
+        else:
+            return result
 
     def _fuse_predict_with_reconstruction(self, predict_list, rec_scores):
         cls_probs = predict_list.reshape(-1, predict_list.shape[-1])

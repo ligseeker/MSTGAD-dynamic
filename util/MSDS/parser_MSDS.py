@@ -22,6 +22,25 @@ parser.add_argument("--eval_interval", default=5, type=int,
                     help='evaluate every N epochs after warm-up')
 parser.add_argument("--train_eval_interval", default=1, type=int,
                     help='evaluate train metrics every N epochs; 0 disables it')
+parser.add_argument("--monitor_metric", default='f1', type=str,
+                    choices=['f1', 'auc', 'ap', 'pr', 'rc'],
+                    help='primary metric for scheduler and early-stop')
+parser.add_argument("--monitor_patience", default=6, type=int,
+                    help='early-stop patience counted by evaluation rounds')
+parser.add_argument("--monitor_warmup_epochs", default=20, type=int,
+                    help='do not early-stop before this epoch')
+parser.add_argument("--monitor_min_delta", default=0.002, type=float,
+                    help='minimum monitor metric improvement to reset patience')
+parser.add_argument("--threshold_search", default=True, type=lambda x: x.lower() == "true",
+                    help='search best threshold on train split before each test evaluation')
+parser.add_argument("--threshold_grid_step", default=0.01, type=float,
+                    help='threshold search step in [0.05, 0.95]')
+parser.add_argument("--threshold_ema", default=0.8, type=float,
+                    help='EMA factor for smoothing calibrated threshold')
+parser.add_argument("--plateau_factor", default=0.5, type=float,
+                    help='ReduceLROnPlateau factor')
+parser.add_argument("--plateau_patience", default=4, type=int,
+                    help='ReduceLROnPlateau patience counted by evaluation rounds')
 parser.add_argument("--label_weight", default=1e-2, type=float,
                     help='the unkown weight in reconstruction loss')
 parser.add_argument("--label_percent", default=0.5, type=float,
