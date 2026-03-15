@@ -153,3 +153,15 @@ f1   pr:0.0213  rc:0.8915  auc:0.8483 ap:0.5889 f1: 0.0417 pred_right: 11109 pre
  MSTGAD-755ca97b --weight_decay:0.0005   --learning_change:100 
 loss   pr:0.1257  rc:0.8000  auc:0.7995 ap:0.8296 f1: 0.2172 pred_right: 129 pred_wrong:191 actu_right: 290 actu_wrong: 30
 f1   pr:0.1257  rc:0.8000  auc:0.7995 ap:0.8296 f1: 0.2172 pred_right: 129 pred_wrong:191 actu_right: 290 actu_wrong: 30
+
+ MSTGAD-db44742c --weight_decay:0.0005   --learning_change:100 
+loss   pr:0.9528  rc:0.9380  auc:0.9969 ap:0.9613 f1: 0.9453 pred_right: 16373 pred_wrong:127 actu_right: 16371 actu_wrong: 129 thr:0.5000
+f1   pr:0.9919  rc:0.9535  auc:0.9974 ap:0.9871 f1: 0.9723 pred_right: 16376 pred_wrong:124 actu_right: 16371 actu_wrong: 129 thr:0.5000
+
+ MSTGAD-6ae0b859 --weight_decay:0.0005   --learning_change:100 
+loss   pr:0.9328  rc:0.9690  auc:0.9987 ap:0.9729 f1: 0.9506 pred_right: 16366 pred_wrong:134 actu_right: 16371 actu_wrong: 129 thr:0.6338
+f1   pr:0.9470  rc:0.9690  auc:0.9984 ap:0.9699 f1: 0.9579 pred_right: 16368 pred_wrong:132 actu_right: 16371 actu_wrong: 129 thr:0.6338
+
+ MSTGAD-621288c1 --weight_decay:0.0005   --learning_change:100 
+loss   pr:0.9531  rc:0.9457  auc:0.9982 ap:0.9778 f1: 0.9494 pred_right: 16372 pred_wrong:128 actu_right: 16371 actu_wrong: 129 thr:0.5070
+f1   pr:0.9609  rc:0.9535  auc:0.9978 ap:0.9741 f1: 0.9572 pred_right: 16372 pred_wrong:128 actu_right: 16371 actu_wrong: 129 thr:0.5070

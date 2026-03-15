@@ -18,10 +18,11 @@ run_once() {
   local tag="$1"
   shift
   echo "[run_msds_compare] Starting ${tag} run..." >&2
-  python main.py --epochs "${EPOCHS}" "$@"
+  # Keep stdout clean so command substitution only captures the run directory.
+  python main.py --epochs "${EPOCHS}" "$@" >&2
   local run_dir
-  run_dir="$(latest_run_dir)"
-  if [[ -z "${run_dir}" ]]; then
+  run_dir="$(latest_run_dir | tail -n 1 | tr -d '\r')"
+  if [[ -z "${run_dir}" || ! -d "${run_dir}" ]]; then
     echo "[run_msds_compare] ERROR: no result folder found after ${tag} run" >&2
     exit 1
   fi

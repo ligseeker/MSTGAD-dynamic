@@ -13,6 +13,7 @@ TEST_PATTERN = re.compile(
     r"\[test\]\s+pr:([0-9.]+)\s+rc:([0-9.]+)\s+auc:([0-9.]+)\s+ap:([0-9.]+)\s+f1:([0-9.]+)(?:\s+thr:([0-9.]+|argmax))?"
 )
 EARLY_STOP_PATTERN = re.compile(r"Early stop at epoch[: ]+(\d+)")
+ANSI_PATTERN = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def _safe_mean(values):
@@ -27,8 +28,23 @@ def _safe_std(values):
     return float(statistics.pstdev(values))
 
 
+def _normalize_log_path(raw):
+    text = ANSI_PATTERN.sub("", str(raw))
+    candidates = [line.strip() for line in text.splitlines() if line.strip()]
+    if not candidates:
+        candidates = [text.strip()]
+
+    for candidate in reversed(candidates):
+        if candidate.endswith(".log") or "/running.log" in candidate:
+            path = Path(candidate)
+            if path.exists():
+                return path
+
+    return Path(candidates[-1])
+
+
 def parse_running_log(path):
-    path = Path(path)
+    path = _normalize_log_path(path)
     if not path.exists():
         raise FileNotFoundError(f"{path} not found")
 
