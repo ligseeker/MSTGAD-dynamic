@@ -18,7 +18,7 @@ parser.add_argument("--learning_change", default=100, type=int,
                     help='the epoch number that change learning rate')
 parser.add_argument("--learning_gamma", default=0.9, type=float,
                     help='the weight that change learning rate')
-parser.add_argument("--eval_interval", default=5, type=int,
+parser.add_argument("--eval_interval", default=1, type=int,
                     help='evaluate every N epochs after warm-up')
 parser.add_argument("--train_eval_interval", default=1, type=int,
                     help='evaluate train metrics every N epochs; 0 disables it')

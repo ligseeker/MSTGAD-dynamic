@@ -2,12 +2,15 @@
 data/
 result/
 
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/
+**/.ipynb_checkpoints/
 
 # 可选：添加其他常见需要忽略的文件（根据项目类型补充）
 # 比如 Python 项目
 __pycache__/
 *.pyc
-.ipynb_checkpoints/
+
 # 比如日志文件
 # *.log
 # 比如环境配置文件
